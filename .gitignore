@@ -1,0 +1,37 @@
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local OS and IDE files
+.DS_Store
+.idea/
+*.iml
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+secrets/
+exchange-bot-*.json
+*credentials*.json
+*service-account*.json
+google-service-account*.json
+
+# Local data and internal project documents
+/dumps/
+/Crm SkyEx (2).pdf
+/COMMANDS.md
+/refactoring.md
+/CRM.pdf
+/requirements-dev.txt
+/workflow.md
+/workflow_crm.md
