@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Mapping
 from typing import cast
 
 from db_asyncpg.ports.workflows import (
@@ -22,13 +22,13 @@ class WalletService:
         self,
         *,
         repo: ClientTransferRepositoryPort,
-        city_cash_chat_ids: Iterable[int] | None = None,
+        city_cash_chats: Mapping[str, int] | None = None,
         keyboards: WalletKeyboardPort | None = None,
     ) -> None:
         self.repo = repo
         self.keyboards = keyboards or NullWalletKeyboardPresenter()
         self.text_builder = WalletTextBuilder()
-        self.parser = WalletCommandParser(city_cash_chat_ids=city_cash_chat_ids)
+        self.parser = WalletCommandParser(city_cash_chats=city_cash_chats)
         wallet_query_repo = cast(ClientWalletRepositoryPort, repo)
         wallet_undo_repo = cast(ClientWalletTransactionRepositoryPort, repo)
         self.query_service = WalletQueryService(

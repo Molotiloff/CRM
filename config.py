@@ -19,7 +19,6 @@ def _parse_int_list(s: str | None) -> list[int]:
 def _parse_ids_set(s: str | None) -> set[int]:
     """
     Формат env:
-      CITY_CASH_CHAT_IDS="-4301,-52251,-50"
       SCHEDULE_CHAT_IDS="-1001,-1002"
     """
     if not s:
@@ -43,11 +42,17 @@ def _is_loopback_host(host: str) -> bool:
         return False
 
 
-def _parse_city_chat_map(s: str | None, *, env_name: str) -> dict[str, int]:
+def _parse_city_chat_map(
+    s: str | None,
+    *,
+    env_name: str,
+    unique_chat_ids: bool = False,
+) -> dict[str, int]:
     """
     Формат env:
       CASH_CHAT_ID="екб:-49509,члб:-49502"
       CITY_SCHEDULE_CHATS="екб:-60001,члб:-60002"
+      CITY_CASH_CHAT_IDS="екб:-4301,члб:-52251,тюм:-50"
     """
     out: dict[str, int] = {}
     raw = (s or "").strip()
@@ -66,8 +71,20 @@ def _parse_city_chat_map(s: str | None, *, env_name: str) -> dict[str, int]:
         city = (city or "").strip().lower()
         chat_id = (chat_id or "").strip()
         if not city or not chat_id:
-            continue
-        out[city] = int(chat_id)
+            raise RuntimeError(f"В {env_name} город и chat_id обязательны")
+        if city in out:
+            raise RuntimeError(f"В {env_name} город {city!r} указан повторно")
+        try:
+            parsed_chat_id = int(chat_id)
+        except ValueError:
+            raise RuntimeError(f"В {env_name} некорректный chat_id: {chat_id!r}") from None
+        if parsed_chat_id == 0:
+            raise RuntimeError(f"В {env_name} chat_id не может быть равен 0")
+        if unique_chat_ids and parsed_chat_id in out.values():
+            raise RuntimeError(
+                f"В {env_name} chat_id {parsed_chat_id} привязан к нескольким городам"
+            )
+        out[city] = parsed_chat_id
     return out
 
 
@@ -103,8 +120,8 @@ class Config:
 
     default_city: str  # например "екб"
 
-    # кассы города (операционные чаты кассиров)
-    city_cash_chat_ids: set[int]
+    # город -> операционный чат физической кассы
+    city_cash_chat_map: dict[str, int]
     getblock: GetBlockSettings | None
     api_enabled: bool
     api_host: str
@@ -165,7 +182,11 @@ class Config:
 
         default_city = (os.getenv("DEFAULT_CITY", "екб") or "екб").strip().lower()
 
-        city_cash_chat_ids = _parse_ids_set(os.getenv("CITY_CASH_CHAT_IDS"))
+        city_cash_chat_map = _parse_city_chat_map(
+            os.getenv("CITY_CASH_CHAT_IDS"),
+            env_name="CITY_CASH_CHAT_IDS",
+            unique_chat_ids=True,
+        )
 
         getblock_identity = os.getenv("GETBLOCK_IDENTITY", "").strip()
         getblock_password = os.getenv("GETBLOCK_PASSWORD", "").strip()
@@ -222,7 +243,7 @@ class Config:
             schedule_chat_ids=schedule_chat_ids,
             rate_orders_chat_id=rate_orders_chat_id,
             default_city=default_city,
-            city_cash_chat_ids=city_cash_chat_ids,
+            city_cash_chat_map=city_cash_chat_map,
             getblock=getblock,
             api_enabled=api_enabled,
             api_host=api_host,
@@ -232,3 +253,8 @@ class Config:
             api_dev_auth_bypass=api_dev_auth_bypass,
             api_dev_tg_user_id=api_dev_tg_user_id,
         )
+
+    @property
+    def city_cash_chat_ids(self) -> frozenset[int]:
+        """Compatibility membership view; the city map remains the source of truth."""
+        return frozenset(self.city_cash_chat_map.values())

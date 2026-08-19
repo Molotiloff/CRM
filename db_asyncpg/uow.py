@@ -6,6 +6,7 @@ import asyncpg
 
 from db_asyncpg.repositories.deals import DealRepository
 from db_asyncpg.repositories.exchange_requests import ExchangeRequestsRepo
+from db_asyncpg.repositories.firm_positions import FirmPositionsRepo
 from db_asyncpg.repositories.request_schedule import RequestScheduleRepo
 from db_asyncpg.repositories.transactions import TransactionsRepo
 
@@ -22,6 +23,7 @@ class AsyncpgUnitOfWork:
         self.exchange_requests: ExchangeRequestsRepo
         self.request_schedule: RequestScheduleRepo
         self.deals: DealRepository
+        self.firm_positions: FirmPositionsRepo
 
     async def __aenter__(self) -> AsyncpgUnitOfWork:
         self._connection = await self._pool.acquire()
@@ -40,6 +42,10 @@ class AsyncpgUnitOfWork:
             connection=self._connection,
         )
         self.deals = DealRepository(
+            self._pool,
+            connection=self._connection,
+        )
+        self.firm_positions = FirmPositionsRepo(
             self._pool,
             connection=self._connection,
         )

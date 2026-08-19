@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import partial
 
 import asyncpg
 
@@ -57,6 +56,7 @@ from gutils.requests_sheet_gateway import (
     ThreadedSheetsTradeGateway,
 )
 from observability import InMemoryMetrics, MetricsPort
+from services.accounting import FirmPositionAccountingService
 from services.act_counter import ActCounterService
 from services.cash_requests.calculator import CashRequestCalculator
 from services.cash_requests.card_parser import CashCardParser
@@ -189,6 +189,11 @@ class ExchangeServices:
 
 
 @dataclass(frozen=True, slots=True)
+class AccountingServices:
+    firm_positions: FirmPositionAccountingService
+
+
+@dataclass(frozen=True, slots=True)
 class ApplicationContainer:
     config: Config
     pool: asyncpg.Pool
@@ -198,6 +203,7 @@ class ApplicationContainer:
     api_queries: ApiQueryServices
     cash: CashServices
     exchange: ExchangeServices
+    accounting: AccountingServices
     sheets_gateway: AsyncSheetsTradeGateway
     rate_provider: GutilsFirmRateProvider
     messenger: MessengerPort
@@ -260,8 +266,14 @@ class ApplicationContainer:
             router_service=request_router,
             schedule_coordinator=cash_schedule_coordinator,
         )
-        unit_of_work_factory: UnitOfWorkFactory = partial(AsyncpgUnitOfWork, pool)
+        def build_unit_of_work() -> AsyncpgUnitOfWork:
+            return AsyncpgUnitOfWork(pool)
+
+        unit_of_work_factory: UnitOfWorkFactory = build_unit_of_work
         exchange_balance = ExchangeBalanceService(unit_of_work_factory)
+        accounting = AccountingServices(
+            firm_positions=FirmPositionAccountingService(unit_of_work_factory),
+        )
         exchange = ExchangeServices(
             unit_of_work_factory=unit_of_work_factory,
             balance=exchange_balance,
@@ -336,6 +348,7 @@ class ApplicationContainer:
                 status_workflow=cash_status_workflow,
             ),
             exchange=exchange,
+            accounting=accounting,
             sheets_gateway=sheets_gateway,
             rate_provider=dashboard_provider,
             messenger=transport_messenger,

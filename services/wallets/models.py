@@ -18,6 +18,7 @@ class ParsedCurrencyChange:
     amount: Decimal
     tail: str
     is_city_cash: bool
+    cash_city: str | None
     client_name_for_transfer: str
     extra_comment: str
 

@@ -1,3 +1,11 @@
+from .accounting import (
+    FIRM_POSITION_CURRENCIES,
+    FirmPosition,
+    FirmPositionMove,
+    FirmPositionMoveKind,
+    NewFirmPositionMove,
+    firm_position_currency,
+)
 from .deal_bodies import CashDealBody, ExchangeDealBody
 from .deal_policy import DealTransitionPolicy, InvalidDealTransitionError
 from .deals import (
@@ -24,6 +32,7 @@ from .value_objects import (
 )
 
 __all__ = [
+    "FIRM_POSITION_CURRENCIES",
     "CashDealBody",
     "CashRequestKind",
     "CityCode",
@@ -40,9 +49,14 @@ __all__ = [
     "ExchangeDealBody",
     "ExchangeRequestSource",
     "ExchangeRequestStatus",
+    "FirmPosition",
+    "FirmPositionMove",
+    "FirmPositionMoveKind",
     "InvalidDealTransitionError",
     "Money",
+    "NewFirmPositionMove",
     "ScheduleEntry",
     "SourceKind",
     "TelegramMessageRef",
+    "firm_position_currency",
 ]

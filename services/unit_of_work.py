@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from types import TracebackType
-from typing import Protocol, Self
+from typing import TYPE_CHECKING, Protocol, Self
 
 from db_asyncpg.ports.cash import RequestScheduleRepositoryPort
 from db_asyncpg.ports.exchange import ExchangeRequestRepositoryPort
 from db_asyncpg.ports.ledger import TransactionRepositoryPort
-from services.crm.deal_service import DealRepositoryPort
+
+if TYPE_CHECKING:
+    from services.accounting.ports import FirmPositionRepositoryPort
+    from services.crm.deal_service import DealRepositoryPort
 
 
 class UnitOfWorkPort(Protocol):
@@ -15,6 +18,7 @@ class UnitOfWorkPort(Protocol):
     exchange_requests: ExchangeRequestRepositoryPort
     request_schedule: RequestScheduleRepositoryPort
     deals: DealRepositoryPort
+    firm_positions: FirmPositionRepositoryPort
 
     async def __aenter__(self) -> Self: ...
 

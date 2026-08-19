@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from enum import StrEnum
@@ -13,7 +14,11 @@ class CurrencyCode:
 
     def __post_init__(self) -> None:
         normalized = str(self.value).strip().upper()
-        if not normalized or len(normalized) > 12 or not normalized.isalnum():
+        if (
+            not normalized
+            or len(normalized) > 12
+            or re.fullmatch(r"[A-Z0-9]+(?:_[A-Z0-9]+)*", normalized) is None
+        ):
             raise DomainValidationError(f"Invalid currency code: {self.value!r}")
         object.__setattr__(self, "value", normalized)
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -37,14 +37,15 @@ class WalletsHandler:
         *,
         request_chat_id: int | None = None,
         ignore_chat_ids: Iterable[int] | None = None,
-        city_cash_chat_ids: Iterable[int] | None = None,
+        city_cash_chats: Mapping[str, int] | None = None,
     ) -> None:
         self.repo = repo
         self.admin_chat_ids = set(admin_chat_ids or [])
         self.admin_user_ids = set(admin_user_ids or [])
         self.request_chat_id = int(request_chat_id) if request_chat_id is not None else None
         self.ignore_chat_ids = set(ignore_chat_ids or [])
-        self.city_cash_chat_ids = set(city_cash_chat_ids or [])
+        self.city_cash_chats = dict(city_cash_chats or {})
+        self.city_cash_chat_ids = set(self.city_cash_chats.values())
         self._background_tasks: set[asyncio.Task[None]] = set()
         self.city_cash_media_store = city_cash_media_store
         self.chat_locks = chat_locks

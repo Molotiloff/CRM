@@ -27,6 +27,7 @@ exchange-bot-*.json
 google-service-account*.json
 
 # Local data and internal project documents
+/scripts/
 /dumps/
 /Crm SkyEx (2).pdf
 /COMMANDS.md
@@ -35,3 +36,5 @@ google-service-account*.json
 /requirements-dev.txt
 /workflow.md
 /workflow_crm.md
+/main_menu_workflow.md
+/main_realization.md

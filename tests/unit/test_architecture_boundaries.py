@@ -552,6 +552,7 @@ def test_infrastructure_packages_expose_only_composition_entry_points() -> None:
         "ActCounterRepo",
         "ClientsRepo",
         "ExchangeRequestsRepo",
+        "FirmPositionsRepo",
         "LiveMessagesRepo",
         "ManagersRepo",
         "PaymentWatchRepo",
@@ -575,6 +576,7 @@ def test_infrastructure_packages_expose_only_composition_entry_points() -> None:
 
 def test_domain_and_transport_packages_expose_only_cross_context_types() -> None:
     assert _package_exports(PROJECT_ROOT / "domain" / "__init__.py") == {
+        "FIRM_POSITION_CURRENCIES",
         "CashDealBody",
         "CashRequestKind",
         "CityCode",
@@ -591,11 +593,16 @@ def test_domain_and_transport_packages_expose_only_cross_context_types() -> None
         "ExchangeDealBody",
         "ExchangeRequestSource",
         "ExchangeRequestStatus",
+        "FirmPosition",
+        "FirmPositionMove",
+        "FirmPositionMoveKind",
         "InvalidDealTransitionError",
         "Money",
+        "NewFirmPositionMove",
         "ScheduleEntry",
         "SourceKind",
         "TelegramMessageRef",
+        "firm_position_currency",
     }
     assert _package_exports(PROJECT_ROOT / "handlers" / "__init__.py") == {
         "AMLHandler",

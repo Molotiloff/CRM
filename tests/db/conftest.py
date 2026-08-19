@@ -32,6 +32,7 @@ from tests.conftest import database_user, managed_test_database_url
 # clients, поэтому перечислены явно.
 _TRUNCATE_SQL = """
 TRUNCATE
+    firm_position_moves,
     clients,
     tg_outbox,
     request_schedule_entries,

@@ -30,7 +30,7 @@ def _config() -> Config:
         schedule_chat_ids=set(),
         rate_orders_chat_id=None,
         default_city="екб",
-        city_cash_chat_ids={-100005},
+        city_cash_chat_map={"екб": -100005},
         getblock=None,
         api_enabled=True,
         api_host="127.0.0.1",
@@ -72,6 +72,7 @@ async def test_container_builds_shared_api_and_telegram_graph() -> None:
     assert container.crm.deals._metrics is container.metrics
     assert container.crm.telegram_registrar._deal_service is container.crm.deals
     assert container.crm.source_mutation._deals is container.crm.deals
+    assert container.accounting.firm_positions is not None
     assert runtime.tg_outbox_worker is not None
     assert runtime.tg_outbox_worker._metrics is container.metrics
     assert runtime.payment_watch_poller is not None

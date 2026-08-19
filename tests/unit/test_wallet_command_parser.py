@@ -21,11 +21,12 @@ def test_parse_regular_currency_change_without_transport_objects() -> None:
     assert parsed.amount == Decimal("1250")
     assert parsed.extra_comment == "оплата заказа"
     assert parsed.is_city_cash is False
+    assert parsed.cash_city is None
     assert parsed.client_name_for_transfer == ""
 
 
 def test_parse_city_cash_transfer_tail() -> None:
-    parser = WalletCommandParser(city_cash_chat_ids={200})
+    parser = WalletCommandParser(city_cash_chats={"екб": 200})
 
     parsed = parser.parse_currency_change(
         "/usdt -50 Client Name ! invoice 42",
@@ -36,6 +37,7 @@ def test_parse_city_cash_transfer_tail() -> None:
     assert parsed.code == "USDT"
     assert parsed.amount == Decimal("-50")
     assert parsed.is_city_cash is True
+    assert parsed.cash_city == "екб"
     assert parsed.client_name_for_transfer == "Client Name"
     assert parsed.extra_comment == "invoice 42"
 

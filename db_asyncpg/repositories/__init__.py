@@ -1,6 +1,7 @@
 from .act_counter import ActCounterRepo
 from .clients import ClientsRepo
 from .exchange_requests import ExchangeRequestsRepo
+from .firm_positions import FirmPositionsRepo
 from .live_messages import LiveMessagesRepo
 from .managers import ManagersRepo
 from .payment_watch import PaymentWatchRepo
@@ -13,6 +14,7 @@ __all__ = [
     "ActCounterRepo",
     "ClientsRepo",
     "ExchangeRequestsRepo",
+    "FirmPositionsRepo",
     "LiveMessagesRepo",
     "ManagersRepo",
     "PaymentWatchRepo",

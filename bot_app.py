@@ -77,12 +77,12 @@ class BotApp:
                 raise RuntimeError("Bot services are not initialized")
             logging.info(
                 "Bot is starting… (request_chat_id=%s, city_cash_chats=%s, "
-                "ignore_chat_ids=%s, city_cash_chat_ids=%s, rate_orders_chat_id=%s, "
+                "ignore_chat_ids=%s, city_cash_chat_map=%s, rate_orders_chat_id=%s, "
                 "aml_enabled=%s, rapira_enabled=%s)",
                 self.config.request_chat_id,
                 self.config.cash_chat_map,
                 self.ignore_chat_ids,
-                self.config.city_cash_chat_ids,
+                self.config.city_cash_chat_map,
                 self.config.rate_orders_chat_id,
                 bool(self.config.getblock),
                 self.services.market_ws_service is not None,

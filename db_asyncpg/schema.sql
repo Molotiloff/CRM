@@ -458,16 +458,52 @@ CREATE TABLE IF NOT EXISTS capital_payouts (     -- фактические вы�
 -- (та же конструкция, что transactions.balance_after), НЕ пересчёт истории.
 CREATE TABLE IF NOT EXISTS firm_position_moves (
     id BIGSERIAL PRIMARY KEY,
-    currency_code TEXT NOT NULL,                 -- USDT, EUR, USD BL, USD WH, CNY…
+    currency_code TEXT NOT NULL,                 -- USDT, EUR, USD_BL, USD_WH
     deal_id BIGINT REFERENCES deals(id),
-    kind TEXT NOT NULL CHECK (kind IN ('purchase','sale','adjust')),
+    deal_leg_id BIGINT REFERENCES deal_legs(id),
+    kind TEXT NOT NULL CHECK (kind IN (
+        'opening','purchase','sale','adjust','reversal','profit_capitalization'
+    )),
     qty NUMERIC(38,8) NOT NULL,                  -- + покупка / − продажа (знаковая)
     rub_amount NUMERIC(38,8) NOT NULL,           -- рублёвая стоимость движения (знаковая)
-    qty_after NUMERIC(38,8) NOT NULL,            -- денормализованный остаток
-    rub_cost_after NUMERIC(38,8) NOT NULL,       -- остаток рублёвой себестоимости
+    qty_after NUMERIC(38,8) NOT NULL CHECK (qty_after >= 0),
+    rub_cost_after NUMERIC(38,8) NOT NULL CHECK (rub_cost_after >= 0),
+    entry_rate NUMERIC(38,8),
+    effective_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_by BIGINT REFERENCES users(id),
+    idempotency_key TEXT NOT NULL,
+    reversal_of_id BIGINT REFERENCES firm_position_moves(id),
+    reason TEXT,
+    CHECK (kind <> 'adjust' OR NULLIF(BTRIM(reason), '') IS NOT NULL),
+    CHECK (
+        kind <> 'reversal'
+        OR (reversal_of_id IS NOT NULL AND NULLIF(BTRIM(reason), '') IS NOT NULL)
+    ),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_firm_position_moves_cur ON firm_position_moves(currency_code, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_firm_position_moves_idempotency
+    ON firm_position_moves(idempotency_key);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_firm_position_moves_reversal
+    ON firm_position_moves(reversal_of_id) WHERE reversal_of_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_firm_position_moves_deal_leg
+    ON firm_position_moves(deal_leg_id) WHERE deal_leg_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_firm_position_moves_effective_at
+    ON firm_position_moves(effective_at);
+
+CREATE OR REPLACE FUNCTION prevent_firm_position_move_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'firm_position_moves is append-only';
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_firm_position_moves_append_only ON firm_position_moves;
+CREATE TRIGGER trg_firm_position_moves_append_only
+BEFORE UPDATE OR DELETE ON firm_position_moves
+FOR EACH ROW
+EXECUTE FUNCTION prevent_firm_position_move_mutation();
 
 -- Фактические остатки кошельков по валютам («Разрыв USDT» на Главной считается
 -- от руками вбитого факта; для USDT позже — из payment_watch/Tronscan) -----------

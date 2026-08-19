@@ -117,7 +117,7 @@ def setup_handlers(
     client_transfer_repo = repositories.client_transfers
 
     request_chat_id = config.request_chat_id
-    city_cash_chat_ids = config.city_cash_chat_ids
+    city_cash_chats = config.city_cash_chat_map
     ignore_chat_ids = set(ignore_chat_ids or [])
 
     services = BotRuntimeServices()
@@ -243,7 +243,7 @@ def setup_handlers(
     wallet_interaction_service = WalletInteractionService(
         wallet_service=WalletService(
             repo=client_transfer_repo,
-            city_cash_chat_ids=city_cash_chat_ids,
+            city_cash_chats=city_cash_chats,
             keyboards=AiogramWalletKeyboardPresenter(),
         )
     )
@@ -256,7 +256,7 @@ def setup_handlers(
         admin_user_ids=admin_user_list,
         request_chat_id=request_chat_id,
         ignore_chat_ids=None,
-        city_cash_chat_ids=city_cash_chat_ids,
+        city_cash_chats=city_cash_chats,
     )
 
     accept_short_service = AcceptShortService(

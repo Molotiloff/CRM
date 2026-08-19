@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Mapping
 from decimal import Decimal
 
 from services.expression_calculator import CalcError, evaluate
@@ -33,8 +33,14 @@ class WalletCommandParser:
         "евро500": "EUR500",
     }
 
-    def __init__(self, *, city_cash_chat_ids: Iterable[int] | None = None) -> None:
-        self.city_cash_chat_ids = set(city_cash_chat_ids or [])
+    def __init__(self, *, city_cash_chats: Mapping[str, int] | None = None) -> None:
+        self.city_cash_chats = {
+            str(city).strip().lower(): int(chat_id)
+            for city, chat_id in (city_cash_chats or {}).items()
+        }
+        self._city_by_chat_id = {
+            chat_id: city for city, chat_id in self.city_cash_chats.items()
+        }
 
     @classmethod
     def normalize_code_alias(cls, raw_code: str) -> str:
@@ -96,7 +102,8 @@ class WalletCommandParser:
         if amount == 0:
             raise ValueError("Сумма должна быть ненулевой")
 
-        is_city_cash = chat_id in self.city_cash_chat_ids
+        cash_city = self._city_by_chat_id.get(chat_id)
+        is_city_cash = cash_city is not None
 
         if is_city_cash:
             client_name_for_transfer, extra_comment = self.split_city_transfer_tail(tail)
@@ -109,6 +116,7 @@ class WalletCommandParser:
             amount=Decimal(amount),
             tail=tail,
             is_city_cash=is_city_cash,
+            cash_city=cash_city,
             client_name_for_transfer=client_name_for_transfer,
             extra_comment=extra_comment,
         )
