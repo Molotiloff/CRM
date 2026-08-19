@@ -12,6 +12,7 @@
 Запуск:
     python scripts/verify_crm_stats.py postgresql://localhost:5432/crmskyex_mig_test
 """
+
 import asyncio
 import os
 import sys
@@ -20,10 +21,16 @@ from decimal import Decimal
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from db_asyncpg.pool import close_pool, create_pool  # noqa: E402
-from db_asyncpg.repositories.crm_stats import CrmStatsRepo  # noqa: E402
-from db_asyncpg.repositories.firm_positions import FirmPositionsRepo  # noqa: E402
-from services.crm import FirmPositionService, StatisticsService  # noqa: E402
+from db_asyncpg.pool import close_pool, create_pool
+from db_asyncpg.repositories.crm_stats import CrmStatsRepo
+from db_asyncpg.repositories.firm_positions import FirmPositionsRepo
+from db_asyncpg.uow import AsyncpgUnitOfWork
+from services.accounting import (
+    FirmPositionAccountingService,
+    RecordPurchase,
+    RecordSale,
+)
+from services.crm import StatisticsService
 
 if len(sys.argv) != 2:
     sys.exit("usage: verify_crm_stats.py <DSN тестовой БД (данные будут стёрты!)>")
@@ -60,15 +67,26 @@ async def insert_sale(con, d, currency, entry, qty, exit_rate, client_id, city, 
                     'our_profit', ($12::numeric - $11::numeric)),
                 $12, $13)
         """,
-        city, client_id, kt_id, currency, qty, entry, exit_rate, buy, sale,
-        kt_spread, kt_amount, profit, d,
+        city,
+        client_id,
+        kt_id,
+        currency,
+        qty,
+        entry,
+        exit_rate,
+        buy,
+        sale,
+        kt_spread,
+        kt_amount,
+        profit,
+        d,
     )
 
 
 async def main():
     pool = await create_pool(DSN)
     positions_repo = FirmPositionsRepo(pool)
-    pos = FirmPositionService(positions_repo)
+    pos = FirmPositionAccountingService(lambda: AsyncpgUnitOfWork(pool))
     stats = StatisticsService(CrmStatsRepo(pool), positions_repo)
 
     async with pool.acquire() as con:
@@ -92,36 +110,104 @@ async def main():
 
     print("== Позиция фирмы (спека 4.2): покупка → средний курс → продажа ==")
     # «Покупка» строки 6–7: 925 по 75.0 (Члб), 31500 по 75.25 (Мск)
-    await pos.apply_purchase(currency_code="USDT", qty=Decimal("925"), rate=Decimal("75.0"))
-    p = await pos.apply_purchase(currency_code="USDT", qty=Decimal("31500"), rate=Decimal("75.25"))
+    await pos.record_purchase(
+        RecordPurchase(
+            currency="USDT",
+            qty=Decimal("925"),
+            rate=Decimal("75.0"),
+            idempotency_key="verify:purchase:1",
+        )
+    )
+    purchase = await pos.record_purchase(
+        RecordPurchase(
+            currency="USDT",
+            qty=Decimal("31500"),
+            rate=Decimal("75.25"),
+            idempotency_key="verify:purchase:2",
+        )
+    )
+    p = purchase.position
     check("qty после покупок", p.qty, Decimal("32425"))
-    check("rub_cost после покупок", p.rub_cost, Decimal("925") * Decimal("75") + Decimal("31500") * Decimal("75.25"))
-    expected_avg = (Decimal("925") * Decimal("75") + Decimal("31500") * Decimal("75.25")) / Decimal("32425")
-    check("средний курс (Вход)", p.avg_rate, expected_avg, tol=Decimal("0.000001"))
+    check(
+        "rub_cost после покупок",
+        p.rub_cost,
+        Decimal("925") * Decimal("75") + Decimal("31500") * Decimal("75.25"),
+    )
+    expected_avg = (Decimal("925") * Decimal("75") + Decimal("31500") * Decimal("75.25")) / Decimal(
+        "32425"
+    )
+    check("средний курс (Вход)", p.average_rate, expected_avg, tol=Decimal("0.000001"))
 
     # продажа 2292.49 без ручного входа → вход = средний
-    entry, p2 = await pos.apply_sale(currency_code="USDT", qty=Decimal("2292.49"))
-    check("вход = средний курс", entry, expected_avg, tol=Decimal("0.000001"))
+    sale = await pos.record_sale(
+        RecordSale(
+            currency="USDT",
+            qty=Decimal("2292.49"),
+            idempotency_key="verify:sale:1",
+        )
+    )
+    p2 = sale.position
+    check("вход = средний курс", sale.entry_rate, expected_avg, tol=Decimal("0.000001"))
     check("qty после продажи", p2.qty, Decimal("32425") - Decimal("2292.49"))
     # средний курс не должен меняться при списании по среднему
-    check("средний курс стабилен", p2.avg_rate, expected_avg, tol=Decimal("0.000001"))
+    check("средний курс стабилен", p2.average_rate, expected_avg, tol=Decimal("0.000001"))
 
     print("== Лист «Продажа», строки 2–5 → deals(sale) ==")
     d = date(2026, 6, 1)
     async with pool.acquire() as con:
         # A2: USDT вход 75.22 кол-во 2292.49 выход 75.8, от Саши, Члб, КТ-спред 0.1
-        await insert_sale(con, d, "USDT", Decimal("75.22"), Decimal("2292.49"), Decimal("75.8"),
-                          cl["от Саши"], "Члб", kt, Decimal("0.1"))
+        await insert_sale(
+            con,
+            d,
+            "USDT",
+            Decimal("75.22"),
+            Decimal("2292.49"),
+            Decimal("75.8"),
+            cl["от Саши"],
+            "Члб",
+            kt,
+            Decimal("0.1"),
+        )
         # A3: вход 75.1130360418605 кол-во 1599 выход 75.9, TAJO, Члб
-        await insert_sale(con, d, "USDT", Decimal("75.1130360418605"), Decimal("1599"), Decimal("75.9"),
-                          cl["TAJO"], "Члб", None, Decimal("0"))
+        await insert_sale(
+            con,
+            d,
+            "USDT",
+            Decimal("75.1130360418605"),
+            Decimal("1599"),
+            Decimal("75.9"),
+            cl["TAJO"],
+            "Члб",
+            None,
+            Decimal("0"),
+        )
         # A4: вход 75.25 кол-во 31537 выход 75.8, Blato, Екб, КТ-спред 0.3
-        await insert_sale(con, d, "USDT", Decimal("75.25"), Decimal("31537"), Decimal("75.8"),
-                          cl["Blato"], "Екб ", kt, Decimal("0.3"))
+        await insert_sale(
+            con,
+            d,
+            "USDT",
+            Decimal("75.25"),
+            Decimal("31537"),
+            Decimal("75.8"),
+            cl["Blato"],
+            "Екб ",
+            kt,
+            Decimal("0.3"),
+        )
         # A5: вход 75.3 кол-во 84500/75.9 выход 75.6, BestChange, Члб, КТ-спред 0.3
         qty5 = Decimal("84500") / Decimal("75.9")
-        await insert_sale(con, d, "USDT", Decimal("75.3"), qty5, Decimal("75.6"),
-                          cl["BestChange"], "Члб", kt, Decimal("0.3"))
+        await insert_sale(
+            con,
+            d,
+            "USDT",
+            Decimal("75.3"),
+            qty5,
+            Decimal("75.6"),
+            cl["BestChange"],
+            "Члб",
+            kt,
+            Decimal("0.3"),
+        )
 
         # Расходы за 02.06 (лист «Расходы»): постоянный Аренда 30000 Члб + переменный 2184 Екб 01.06
         await con.execute(
@@ -138,14 +224,18 @@ async def main():
         )
 
     # Ожидания из формул листа:
-    j2 = Decimal("2292.49") * Decimal("75.8") - Decimal("2292.49") * Decimal("75.22")   # 1329.6442
+    j2 = Decimal("2292.49") * Decimal("75.8") - Decimal("2292.49") * Decimal("75.22")  # 1329.6442
     j3 = Decimal("1599") * Decimal("75.9") - Decimal("1599") * Decimal("75.1130360418605")
-    j4 = Decimal("31537") * Decimal("75.8") - Decimal("31537") * Decimal("75.25")       # 17345.35
-    j5 = qty5 * Decimal("75.6") - qty5 * Decimal("75.3")                                # 333.99...
+    j4 = Decimal("31537") * Decimal("75.8") - Decimal("31537") * Decimal("75.25")  # 17345.35
+    j5 = qty5 * Decimal("75.6") - qty5 * Decimal("75.3")  # 333.99...
     total_income = j2 + j3 + j4 + j5
     total_qty = Decimal("2292.49") + Decimal("1599") + Decimal("31537") + qty5
-    total_rub = (Decimal("2292.49") * Decimal("75.8") + Decimal("1599") * Decimal("75.9")
-                 + Decimal("31537") * Decimal("75.8") + qty5 * Decimal("75.6"))
+    total_rub = (
+        Decimal("2292.49") * Decimal("75.8")
+        + Decimal("1599") * Decimal("75.9")
+        + Decimal("31537") * Decimal("75.8")
+        + qty5 * Decimal("75.6")
+    )
 
     print("== Статистика продаж (лист «Статистика») ==")
     st = await stats.sales_statistics()
@@ -153,7 +243,9 @@ async def main():
     check("Общее кол-во", usdt.total.qty, total_qty, tol=Decimal("0.0001"))
     check("Общее руб-объём (Σ сумм продажи)", usdt.total.rub_volume, total_rub)
     check("Общий доход", usdt.total.income, total_income)
-    check("Средний спред", usdt.total.avg_spread, total_income / total_rub, tol=Decimal("0.0000001"))
+    check(
+        "Средний спред", usdt.total.avg_spread, total_income / total_rub, tol=Decimal("0.0000001")
+    )
     ekb = next(r for r in usdt.by_city if r.city == "Екб")
     chlb = next(r for r in usdt.by_city if r.city == "Члб")
     check("Екб кол-во", ekb.qty, Decimal("31537"))
@@ -209,7 +301,12 @@ async def main():
     grand = {o.name: o for o in ts.owners}
     check("Бабушка платим в мес (3M×0.02)", grand["Бабушка"].monthly_payment, Decimal("60000"))
     check("Костя платим в мес (10M×0.025)", grand["Костя"].monthly_payment, Decimal("250000"))
-    check("Костя доля", grand["Костя"].share, Decimal("10000000") / Decimal("13000000"), tol=Decimal("0.0000001"))
+    check(
+        "Костя доля",
+        grand["Костя"].share,
+        Decimal("10000000") / Decimal("13000000"),
+        tol=Decimal("0.0000001"),
+    )
 
     print("== Сверка («Главная», 4.3) ==")
     async with pool.acquire() as con:
@@ -220,12 +317,13 @@ async def main():
         # клиентский RUB-баланс: Blato должен фирме 500000 (дебиторка → −500000)
         await con.execute(
             "INSERT INTO client_accounts(client_id, currency_code, precision, balance) "
-            "VALUES ($1, 'RUB', 2, -500000), ($1, 'USDT', 2, 18843.22)", cl["Blato"]
+            "VALUES ($1, 'RUB', 2, -500000), ($1, 'USDT', 2, 18843.22)",
+            cl["Blato"],
         )
         await con.execute(
             "INSERT INTO internal_accounts(name, kind, balance) VALUES ('Баланс Никита','employee',152012.17)"
         )
-    await pos.repo.set_wallet_fact(currency_code="USDT", actual_qty=Decimal("14"))
+    await positions_repo.set_wallet_fact(currency_code="USDT", actual_qty=Decimal("14"))
 
     rec = await stats.reconciliation()
     check("RUB кассы", rec.rub_cash, Decimal("2883570"))
@@ -235,12 +333,21 @@ async def main():
     check("Общий RUB", rec.total_rub, Decimal("2883570") + pos_now.rub_cost)
     check("Балансы клиентов RUB", rec.client_rub, Decimal("-500000"))
     check("Балансы SkyEx", rec.internal_rub, Decimal("152012.17"))
-    check("Факт. Оборот = Общий RUB − Общий Балансы",
-          rec.fact_turnover, rec.total_rub - Decimal("-500000") - Decimal("152012.17"))
-    check("Оборот = Оборотка + Общая Прибыль",
-          rec.turnover, Decimal("13000000") + rec.accumulated_profit)
-    check("Общая Прибыль = Σ profit − Σ расходов",
-          rec.accumulated_profit, total_income + Decimal("95333.8869") - Decimal("82184"))
+    check(
+        "Факт. Оборот = Общий RUB − Общий Балансы",
+        rec.fact_turnover,
+        rec.total_rub - Decimal("-500000") - Decimal("152012.17"),
+    )
+    check(
+        "Оборот = Оборотка + Общая Прибыль",
+        rec.turnover,
+        Decimal("13000000") + rec.accumulated_profit,
+    )
+    check(
+        "Общая Прибыль = Σ profit − Σ расходов",
+        rec.accumulated_profit,
+        total_income + Decimal("95333.8869") - Decimal("82184"),
+    )
     check("Разрыв", rec.gap, rec.fact_turnover - rec.turnover)
     usdt_fact = next(c for c in rec.currencies if c.currency_code == "USDT")
     check("USDT Клиент.", usdt_fact.client_qty, Decimal("18843.22"))

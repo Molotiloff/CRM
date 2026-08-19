@@ -57,7 +57,7 @@ class CrmStatsRepo(ConnectionBoundRepo):
                        COALESCE(SUM(profit) FILTER (WHERE deal_type NOT IN ('sale','purchase')), 0)
                            AS deals_profit
                 FROM deals
-                WHERE status <> 'canceled'
+                WHERE status = 'done'
                   AND profit IS NOT NULL
                   AND ($1::date IS NULL OR deal_at >= $1)
                   AND ($2::date IS NULL OR deal_at <= $2)
@@ -85,7 +85,7 @@ class CrmStatsRepo(ConnectionBoundRepo):
                            COALESCE(SUM(profit) FILTER (WHERE deal_type NOT IN ('sale','purchase')), 0)
                                AS deals_income
                     FROM deals
-                    WHERE status <> 'canceled' AND profit IS NOT NULL
+                    WHERE status = 'done' AND profit IS NOT NULL
                       AND deal_at BETWEEN $1 AND $2
                     GROUP BY 1
                 ),
@@ -122,7 +122,7 @@ class CrmStatsRepo(ConnectionBoundRepo):
                     SELECT date_trunc('month', deal_at)::date AS month,
                            COALESCE(SUM(profit), 0) AS income
                     FROM deals
-                    WHERE status <> 'canceled' AND profit IS NOT NULL
+                    WHERE status = 'done' AND profit IS NOT NULL
                     GROUP BY 1
                 ),
                 spent AS (
@@ -213,7 +213,7 @@ class CrmStatsRepo(ConnectionBoundRepo):
                       WHERE is_active)                                      AS internal_rub,
                     (SELECT COALESCE(SUM(amount), 0) FROM capital_moves)    AS capital_invested,
                     (SELECT COALESCE(SUM(profit), 0) FROM deals
-                      WHERE status <> 'canceled')                           AS deals_profit_total,
+                      WHERE status = 'done')                                AS deals_profit_total,
                     (SELECT COALESCE(SUM(amount), 0) FROM expenses)         AS expenses_total
                 """
             )

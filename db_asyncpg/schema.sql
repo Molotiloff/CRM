@@ -615,7 +615,7 @@ SELECT d.id,
        d.profit,                                           -- «Прибыль» = продажа−покупка
        (d.body->>'our_profit')::numeric   AS our_profit    -- «наша прибыль» = прибыль−КТ-сумма
 FROM deals d
-WHERE d.deal_type = 'sale' AND d.status <> 'canceled';
+WHERE d.deal_type = 'sale' AND d.status = 'done';
 
 CREATE OR REPLACE VIEW crm_purchases AS
 SELECT d.id,
@@ -631,4 +631,4 @@ SELECT d.id,
        (d.body->>'rub_amount')::numeric  AS rub_amount,    -- «В рубле» = сумма×курс
        d.body->>'seller'                 AS seller
 FROM deals d
-WHERE d.deal_type = 'purchase' AND d.status <> 'canceled';
+WHERE d.deal_type = 'purchase' AND d.status = 'done';
