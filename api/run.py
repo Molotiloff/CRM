@@ -19,6 +19,7 @@ async def run_api() -> None:
     pool = await create_pool(config.database_url)
     try:
         container = ApplicationContainer.build(config, pool)
+        await container.accounting.cash_chat_registry.sync()
         server = uvicorn.Server(
             uvicorn.Config(
                 create_api_app(config, container=container),

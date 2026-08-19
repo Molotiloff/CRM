@@ -75,6 +75,9 @@ class BotApp:
             self._bootstrap(pool)
             if self.services is None:
                 raise RuntimeError("Bot services are not initialized")
+            if self.container is None:
+                raise RuntimeError("Application container is not initialized")
+            await self.container.accounting.cash_chat_registry.sync()
             logging.info(
                 "Bot is starting… (request_chat_id=%s, city_cash_chats=%s, "
                 "ignore_chat_ids=%s, city_cash_chat_map=%s, rate_orders_chat_id=%s, "

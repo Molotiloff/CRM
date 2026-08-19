@@ -32,6 +32,14 @@ from tests.conftest import database_user, managed_test_database_url
 # clients, поэтому перечислены явно.
 _TRUNCATE_SQL = """
 TRUNCATE
+    partner_purchase_allocations,
+    partner_transfer_watches,
+    profit_usdt_accruals,
+    usdt_fulfillment_queue,
+    deal_settlements,
+    firm_wallet_fact_snapshots,
+    firm_wallet_addresses,
+    cash_chat_registry,
     firm_position_moves,
     clients,
     tg_outbox,

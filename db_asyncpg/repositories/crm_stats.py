@@ -208,7 +208,12 @@ class CrmStatsRepo(ConnectionBoundRepo):
                          ORDER BY currency_code, id DESC
                      ) p)                                                   AS rub_in_currency,
                     (SELECT COALESCE(SUM(balance), 0) FROM client_accounts
-                      WHERE is_active AND upper(currency_code) = 'RUB')     AS client_rub,
+                      WHERE is_active AND upper(currency_code) = 'RUB'
+                        AND NOT EXISTS (
+                            SELECT 1 FROM cash_chat_registry cash
+                            WHERE cash.client_id = client_accounts.client_id
+                              AND cash.is_active
+                        ))                                                  AS client_rub,
                     (SELECT COALESCE(SUM(balance), 0) FROM internal_accounts
                       WHERE is_active)                                      AS internal_rub,
                     (SELECT COALESCE(SUM(amount), 0) FROM capital_moves)    AS capital_invested,
@@ -228,6 +233,11 @@ class CrmStatsRepo(ConnectionBoundRepo):
                        COALESCE(SUM(balance), 0) AS total
                 FROM client_accounts
                 WHERE is_active
+                  AND NOT EXISTS (
+                      SELECT 1 FROM cash_chat_registry cash
+                      WHERE cash.client_id = client_accounts.client_id
+                        AND cash.is_active
+                  )
                 GROUP BY 1
                 """
             )

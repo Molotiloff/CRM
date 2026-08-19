@@ -4,6 +4,15 @@ from typing import Protocol
 
 from domain import CurrencyCode, FirmPosition, FirmPositionMove, NewFirmPositionMove
 
+from .models import CashChatBinding, CashChatRegistrySyncResult
+
+
+class CashChatRegistryRepositoryPort(Protocol):
+    async def sync_configured(
+        self,
+        bindings: tuple[CashChatBinding, ...],
+    ) -> CashChatRegistrySyncResult: ...
+
 
 class FirmPositionRepositoryPort(Protocol):
     async def acquire_currency_lock(self, currency: CurrencyCode) -> None: ...

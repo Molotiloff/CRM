@@ -8,6 +8,21 @@ from domain import CurrencyCode
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class CashChatBinding:
+    city: str
+    chat_id: int
+    location_name: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CashChatRegistrySyncResult:
+    configured: int
+    inserted: int
+    reactivated: int
+    deactivated: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PositionCommand:
     currency: CurrencyCode | str
     idempotency_key: str

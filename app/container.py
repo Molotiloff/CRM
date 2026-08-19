@@ -47,6 +47,7 @@ from db_asyncpg.repositories import (
     SettingsRepo,
     TransactionsRepo,
 )
+from db_asyncpg.repositories.cash_chat_registry import CashChatRegistryRepo
 from db_asyncpg.repositories.deal_workflow import DealWorkflowRepository
 from db_asyncpg.repositories.deals import DealRepository
 from db_asyncpg.repositories.tg_outbox import TgOutboxRepository
@@ -56,7 +57,7 @@ from gutils.requests_sheet_gateway import (
     ThreadedSheetsTradeGateway,
 )
 from observability import InMemoryMetrics, MetricsPort
-from services.accounting import FirmPositionAccountingService
+from services.accounting import CashChatRegistrySyncService, FirmPositionAccountingService
 from services.act_counter import ActCounterService
 from services.cash_requests.calculator import CashRequestCalculator
 from services.cash_requests.card_parser import CashCardParser
@@ -191,6 +192,7 @@ class ExchangeServices:
 @dataclass(frozen=True, slots=True)
 class AccountingServices:
     firm_positions: FirmPositionAccountingService
+    cash_chat_registry: CashChatRegistrySyncService
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,13 +268,22 @@ class ApplicationContainer:
             router_service=request_router,
             schedule_coordinator=cash_schedule_coordinator,
         )
+
         def build_unit_of_work() -> AsyncpgUnitOfWork:
             return AsyncpgUnitOfWork(pool)
 
         unit_of_work_factory: UnitOfWorkFactory = build_unit_of_work
         exchange_balance = ExchangeBalanceService(unit_of_work_factory)
+        request_chat_ids = set(config.cash_chat_map.values())
+        if config.request_chat_id is not None:
+            request_chat_ids.add(config.request_chat_id)
         accounting = AccountingServices(
             firm_positions=FirmPositionAccountingService(unit_of_work_factory),
+            cash_chat_registry=CashChatRegistrySyncService(
+                CashChatRegistryRepo(pool),
+                city_cash_chats=config.city_cash_chat_map,
+                request_chat_ids=frozenset(request_chat_ids),
+            ),
         )
         exchange = ExchangeServices(
             unit_of_work_factory=unit_of_work_factory,

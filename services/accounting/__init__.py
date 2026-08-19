@@ -1,3 +1,4 @@
+from .cash_chat_registry_service import CashChatRegistrySyncService
 from .firm_position_service import FirmPositionAccountingService
 from .models import (
     RecordAdjustment,
@@ -8,6 +9,7 @@ from .models import (
 )
 
 __all__ = [
+    "CashChatRegistrySyncService",
     "FirmPositionAccountingService",
     "RecordAdjustment",
     "RecordOpening",

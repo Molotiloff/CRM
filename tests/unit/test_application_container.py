@@ -73,6 +73,7 @@ async def test_container_builds_shared_api_and_telegram_graph() -> None:
     assert container.crm.telegram_registrar._deal_service is container.crm.deals
     assert container.crm.source_mutation._deals is container.crm.deals
     assert container.accounting.firm_positions is not None
+    assert container.accounting.cash_chat_registry is not None
     assert runtime.tg_outbox_worker is not None
     assert runtime.tg_outbox_worker._metrics is container.metrics
     assert runtime.payment_watch_poller is not None

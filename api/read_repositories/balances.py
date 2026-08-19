@@ -26,6 +26,12 @@ class BalanceReadRepository(ConnectionBoundRepo):
                 WHERE c.is_active
                   AND a.is_active
                   AND a.balance <> 0
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM cash_chat_registry cash
+                      WHERE cash.client_id = a.client_id
+                        AND cash.is_active
+                  )
                   AND ($1::text IS NULL OR a.currency_code = UPPER($1))
                   AND ($2::text IS NULL
                        OR ($2 = '+' AND a.balance > 0)
