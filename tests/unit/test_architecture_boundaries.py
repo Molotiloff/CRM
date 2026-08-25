@@ -566,6 +566,7 @@ def test_infrastructure_packages_expose_only_composition_entry_points() -> None:
         "ClientNotFoundError",
         "ClientQueryService",
         "DashboardQueryService",
+        "DashboardUnavailableError",
     }
     assert _package_exports(PROJECT_ROOT / "api" / "read_repositories" / "__init__.py") == {
         "BalanceReadRepository",

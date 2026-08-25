@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -23,11 +25,15 @@ class DashboardDailyIndicatorDto(BaseModel):
 class DashboardCurrencyFactDto(BaseModel):
     code: str
     label: str
-    amount: float
-    rate: float
-    rubValue: float
-    clientAmount: float
-    factAmount: float
+    amount: str
+    rate: str
+    rubValue: str
+    clientAmount: str
+    dealProfitAmount: str
+    factAmount: str
+    observedAmount: str | None
+    gap: str | None
+    observedAt: datetime | None
     tone: str
 
 
@@ -60,6 +66,10 @@ class DashboardSystemMetricDto(BaseModel):
 
 
 class DashboardResponse(BaseModel):
+    source: str
+    calculatedAt: datetime
+    dataAsOf: datetime
+    warnings: list[str]
     dateLabel: str
     weekdayLabel: str
     cities: list[str]

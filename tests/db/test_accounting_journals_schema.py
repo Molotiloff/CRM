@@ -7,8 +7,10 @@ import asyncpg
 import pytest
 
 from api.read_repositories.balances import BalanceReadRepository
+from api.read_repositories.dashboard import DashboardReadRepository
 from db_asyncpg.repositories.cash_chat_registry import CashChatRegistryRepo
 from db_asyncpg.repositories.crm_stats import CrmStatsRepo
+from db_asyncpg.repositories.firm_positions import FirmPositionsRepo
 from domain import DomainStateError
 from services.accounting.cash_chat_registry_service import CashChatRegistrySyncService
 
@@ -152,6 +154,49 @@ async def test_cash_registry_sync_links_existing_clients_without_moving_balances
 
 
 @pytest.mark.asyncio
+async def test_cash_ledger_is_the_only_cash_balance_read_source(pool) -> None:
+    async with pool.acquire() as connection:
+        cash_client = await connection.fetchval(
+            "INSERT INTO clients(chat_id, name) VALUES (-301, 'Касса ЕКБ') RETURNING id"
+        )
+        await connection.execute(
+            """
+            INSERT INTO client_accounts(client_id, currency_code, precision, balance)
+            VALUES ($1, 'RUB', 2, 1250), ($1, 'EUR', 2, 75)
+            """,
+            cash_client,
+        )
+        await connection.execute(
+            """
+            INSERT INTO cash_chat_registry(chat_id, client_id, city, location_name)
+            VALUES (-301, $1, 'екб', 'Основная')
+            """,
+            cash_client,
+        )
+        await connection.execute(
+            """
+            INSERT INTO cash_desks(city, name, currency_code, balance)
+            VALUES ('legacy', 'must be ignored', 'RUB', 999999)
+            """
+        )
+
+    dashboard = await DashboardReadRepository(pool).get_snapshot(
+        business_date=datetime.now(UTC).date()
+    )
+    components = await CrmStatsRepo(pool).reconciliation_components()
+    statistics_cash = await CrmStatsRepo(pool).cash_ledger_balances()
+
+    eur = next(item for item in dashboard.currencies if item.code == "EUR")
+    assert dashboard.reconciliation.rub_cash == Decimal("1250.00000000")
+    assert eur.observed_qty == Decimal("75.00000000")
+    assert components["rub_cash"] == Decimal("1250.00000000")
+    assert {(row["currency_code"], row["balance"]) for row in statistics_cash} == {
+        ("EUR", Decimal("75.00000000")),
+        ("RUB", Decimal("1250.00000000")),
+    }
+
+
+@pytest.mark.asyncio
 async def test_cash_registry_sync_fails_if_configured_chat_has_no_existing_client(
     pool,
 ) -> None:
@@ -236,6 +281,31 @@ async def test_wallet_address_and_fact_snapshot_invariants(pool) -> None:
                 "UPDATE firm_wallet_fact_snapshots SET actual_qty = 20 WHERE id = $1",
                 first_id,
             )
+
+
+@pytest.mark.asyncio
+async def test_latest_wallet_fact_reads_append_only_snapshot_not_legacy_upsert(pool) -> None:
+    observed_at = datetime(2026, 8, 20, 12, tzinfo=UTC)
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            INSERT INTO firm_wallet_facts(currency_code, actual_qty)
+            VALUES ('USDT', 999999)
+            """
+        )
+        await connection.execute(
+            """
+            INSERT INTO firm_wallet_fact_snapshots(
+                currency_code, actual_qty, observed_at, source, idempotency_key
+            )
+            VALUES ('USDT', 42.5, $1, 'import', 'wallet-read:1')
+            """,
+            observed_at,
+        )
+
+    facts = await FirmPositionsRepo(pool).get_wallet_facts()
+
+    assert facts == {"USDT": Decimal("42.50000000")}
 
 
 @pytest.mark.asyncio

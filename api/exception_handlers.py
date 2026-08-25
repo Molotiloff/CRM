@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
 from api.auth import AuthError
-from api.queries import ClientNotFoundError
+from api.queries import ClientNotFoundError, DashboardUnavailableError
 from domain import DomainStateError, DomainValidationError
 from services.crm.deal_service import DealNotFoundError
 
@@ -16,6 +16,7 @@ EXCEPTION_STATUS_MAP: Mapping[type[Exception], int] = {
     DealNotFoundError: status.HTTP_404_NOT_FOUND,
     DomainValidationError: status.HTTP_400_BAD_REQUEST,
     DomainStateError: status.HTTP_409_CONFLICT,
+    DashboardUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
 }
 
 

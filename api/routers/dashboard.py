@@ -21,6 +21,7 @@ def get_dashboard_queries(request: Request) -> DashboardQueryService:
     responses=error_responses(
         status.HTTP_401_UNAUTHORIZED,
         status.HTTP_403_FORBIDDEN,
+        status.HTTP_503_SERVICE_UNAVAILABLE,
     ),
 )
 async def dashboard(

@@ -130,6 +130,7 @@ class Config:
     api_jwt_ttl_seconds: int
     api_dev_auth_bypass: bool
     api_dev_tg_user_id: int | None
+    main_dashboard_source_mode: str = "sheets"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -220,6 +221,16 @@ class Config:
         )
         api_dev_auth_bypass = _parse_bool(os.getenv("CRM_DEV_AUTH_BYPASS"), default=False)
         api_dev_tg_user_id = _parse_int(os.getenv("CRM_DEV_TG_USER_ID"))
+        main_dashboard_source_mode = (
+            os.getenv("MAIN_DASHBOARD_SOURCE_MODE", "sheets") or "sheets"
+        ).strip().lower()
+        if main_dashboard_source_mode not in {
+            "sheets",
+            "db_shadow",
+            "db_primary",
+            "db_only",
+        }:
+            raise RuntimeError("Некорректный MAIN_DASHBOARD_SOURCE_MODE")
         if api_dev_auth_bypass and not _is_loopback_host(api_host):
             raise RuntimeError(
                 "CRM_DEV_AUTH_BYPASS разрешён только для loopback CRM_API_HOST"
@@ -252,6 +263,7 @@ class Config:
             api_jwt_ttl_seconds=api_jwt_ttl_seconds,
             api_dev_auth_bypass=api_dev_auth_bypass,
             api_dev_tg_user_id=api_dev_tg_user_id,
+            main_dashboard_source_mode=main_dashboard_source_mode,
         )
 
     @property

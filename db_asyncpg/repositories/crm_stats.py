@@ -9,7 +9,7 @@ class CrmStatsRepo(ConnectionBoundRepo):
     """
     Агрегаты для статистик CRM — SQL-эквиваленты формул боевой Google-таблицы
     (реверс в workflow_crm.md, раздел 4). Источники: deals (через view
-    crm_sales / crm_purchases), expenses, cash_desks, client_accounts,
+    crm_sales / crm_purchases), expenses, cash-chat ledger, client_accounts,
     internal_accounts, capital_*, firm_position_moves.
     """
 
@@ -200,8 +200,11 @@ class CrmStatsRepo(ConnectionBoundRepo):
             row = await con.fetchrow(
                 """
                 SELECT
-                    (SELECT COALESCE(SUM(balance), 0) FROM cash_desks
-                      WHERE is_active AND upper(currency_code) = 'RUB')     AS rub_cash,
+                    (SELECT COALESCE(SUM(account.balance), 0)
+                       FROM cash_chat_registry cash
+                       JOIN client_accounts account ON account.client_id = cash.client_id
+                      WHERE cash.is_active AND account.is_active
+                        AND UPPER(BTRIM(account.currency_code)) = 'RUB')    AS rub_cash,
                     (SELECT COALESCE(SUM(p.rub_cost_after), 0) FROM (
                          SELECT DISTINCT ON (currency_code) rub_cost_after
                          FROM firm_position_moves
@@ -243,14 +246,19 @@ class CrmStatsRepo(ConnectionBoundRepo):
             )
             return {r["currency_code"]: r["total"] for r in rows}
 
-    async def cash_desk_balances(self) -> list[dict]:
+    async def cash_ledger_balances(self) -> list[dict]:
+        """Physical cash balances backed by registered cash-chat ledgers."""
         async with self._connection() as con:
             rows = await con.fetch(
                 """
-                SELECT city, name, currency_code, balance
-                FROM cash_desks
-                WHERE is_active
-                ORDER BY city, name
+                SELECT cash.city,
+                       cash.location_name AS name,
+                       UPPER(BTRIM(account.currency_code)) AS currency_code,
+                       account.balance
+                FROM cash_chat_registry cash
+                JOIN client_accounts account ON account.client_id = cash.client_id
+                WHERE cash.is_active AND account.is_active
+                ORDER BY cash.city, cash.location_name, currency_code
                 """
             )
             return [dict(r) for r in rows]

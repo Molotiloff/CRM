@@ -151,39 +151,14 @@ class FirmPositionsRepo(ConnectionBoundRepo):
             for position in positions
         ]
 
-    async def set_wallet_fact(
-        self,
-        *,
-        currency_code: str,
-        actual_qty: Decimal,
-        comment: str | None = None,
-        updated_by: int | None = None,
-    ) -> None:
-        """Legacy fact writer retained until wallet snapshots are introduced."""
-        currency = firm_position_currency(currency_code)
-        async with self._connection() as connection:
-            await connection.execute(
-                """
-                INSERT INTO firm_wallet_facts(
-                    currency_code, actual_qty, comment, updated_by, updated_at
-                )
-                VALUES ($1, $2, $3, $4, NOW())
-                ON CONFLICT (currency_code) DO UPDATE
-                SET actual_qty = EXCLUDED.actual_qty,
-                    comment = EXCLUDED.comment,
-                    updated_by = EXCLUDED.updated_by,
-                    updated_at = NOW()
-                """,
-                str(currency),
-                actual_qty,
-                comment,
-                updated_by,
-            )
-
     async def get_wallet_facts(self) -> dict[str, Decimal]:
         async with self._connection() as connection:
             rows = await connection.fetch(
-                "SELECT currency_code, actual_qty FROM firm_wallet_facts"
+                """
+                SELECT DISTINCT ON (currency_code) currency_code, actual_qty
+                FROM firm_wallet_fact_snapshots
+                ORDER BY currency_code, observed_at DESC, id DESC
+                """
             )
         return {
             str(row["currency_code"]): Decimal(str(row["actual_qty"])) for row in rows

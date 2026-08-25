@@ -23,6 +23,16 @@ def test_city_cash_chat_map_parses_named_cities(monkeypatch) -> None:
     assert config.city_cash_chat_ids == frozenset(
         {-1003611459690, -5218770251, -5075605056}
     )
+    assert config.main_dashboard_source_mode == "sheets"
+
+
+def test_dashboard_source_mode_is_validated(monkeypatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123456:test-token")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost/test")
+    monkeypatch.setenv("MAIN_DASHBOARD_SOURCE_MODE", "mixed")
+
+    with pytest.raises(RuntimeError, match="MAIN_DASHBOARD_SOURCE_MODE"):
+        Config.from_env()
 
 
 def test_city_cash_chat_map_rejects_legacy_unnamed_list() -> None:

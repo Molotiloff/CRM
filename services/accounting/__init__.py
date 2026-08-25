@@ -7,6 +7,7 @@ from .models import (
     RecordSale,
     ReversePositionMove,
 )
+from .wallet_fact_service import WalletFactService
 
 __all__ = [
     "CashChatRegistrySyncService",
@@ -16,4 +17,5 @@ __all__ = [
     "RecordPurchase",
     "RecordSale",
     "ReversePositionMove",
+    "WalletFactService",
 ]

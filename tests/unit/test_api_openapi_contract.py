@@ -56,7 +56,7 @@ EXPECTED_ERROR_STATUSES: dict[RouteKey, frozenset[int]] = {
     ("GET", "/api/v1/clients/{client_id}"): frozenset({401, 404}),
     ("GET", "/api/v1/clients/{client_id}/transactions"): frozenset({401, 404}),
     ("GET", "/api/v1/balances"): AUTH_ERRORS,
-    ("GET", "/api/v1/dashboard"): ROLE_ERRORS,
+    ("GET", "/api/v1/dashboard"): frozenset({401, 403, 503}),
     ("GET", "/api/v1/dashboard/rates"): ROLE_ERRORS,
     ("GET", "/api/v1/deals"): frozenset({400, 401, 403}),
     ("POST", "/api/v1/deals"): frozenset({400, 401, 403, 409}),

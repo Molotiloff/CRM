@@ -57,7 +57,11 @@ from gutils.requests_sheet_gateway import (
     ThreadedSheetsTradeGateway,
 )
 from observability import InMemoryMetrics, MetricsPort
-from services.accounting import CashChatRegistrySyncService, FirmPositionAccountingService
+from services.accounting import (
+    CashChatRegistrySyncService,
+    FirmPositionAccountingService,
+    WalletFactService,
+)
 from services.act_counter import ActCounterService
 from services.cash_requests.calculator import CashRequestCalculator
 from services.cash_requests.card_parser import CashCardParser
@@ -84,7 +88,7 @@ from services.exchange.transaction_service import ExchangeTransactionService
 from services.exchange.wallet_presenter import ExchangeWalletPresenter
 from services.messaging import DeferredMessenger, MessengerPort
 from services.request_table import AsyncSheetsTradeGateway
-from services.unit_of_work import UnitOfWorkFactory
+from services.unit_of_work import UnitOfWorkFactory, UnitOfWorkPort
 from telegram_adapters import AiogramCashKeyboardPresenter
 
 
@@ -193,6 +197,7 @@ class ExchangeServices:
 class AccountingServices:
     firm_positions: FirmPositionAccountingService
     cash_chat_registry: CashChatRegistrySyncService
+    wallet_facts: WalletFactService
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,7 +274,7 @@ class ApplicationContainer:
             schedule_coordinator=cash_schedule_coordinator,
         )
 
-        def build_unit_of_work() -> AsyncpgUnitOfWork:
+        def build_unit_of_work() -> UnitOfWorkPort:
             return AsyncpgUnitOfWork(pool)
 
         unit_of_work_factory: UnitOfWorkFactory = build_unit_of_work
@@ -279,6 +284,7 @@ class ApplicationContainer:
             request_chat_ids.add(config.request_chat_id)
         accounting = AccountingServices(
             firm_positions=FirmPositionAccountingService(unit_of_work_factory),
+            wallet_facts=WalletFactService(unit_of_work_factory),
             cash_chat_registry=CashChatRegistrySyncService(
                 CashChatRegistryRepo(pool),
                 city_cash_chats=config.city_cash_chat_map,
@@ -331,10 +337,10 @@ class ApplicationContainer:
             clients=ClientQueryService(crm_repositories.client_reads),
             balances=BalanceQueryService(crm_repositories.balance_reads),
             dashboard=DashboardQueryService(
-                balance_repository=crm_repositories.balance_reads,
                 dashboard_repository=crm_repositories.dashboard_reads,
                 rate_provider=dashboard_provider,
                 sheet_provider=dashboard_provider,
+                source_mode=config.main_dashboard_source_mode,
             ),
         )
         return cls(

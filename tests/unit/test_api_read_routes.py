@@ -21,6 +21,14 @@ from api.schemas.balances import BalancesSnapshotResponse
 from api.schemas.clients import ClientDto, ClientsPageResponse, ClientTransactionsResponse
 from api.schemas.common import ErrorResponse
 from api.schemas.dashboard import DashboardResponse
+from services.accounting.models import (
+    MainDashboardCity,
+    MainDashboardCurrency,
+    MainDashboardOperations,
+    MainDashboardPeriods,
+    MainDashboardReconciliation,
+    MainDashboardSnapshot,
+)
 
 
 class FakeReadRepository:
@@ -73,26 +81,21 @@ class FakeReadRepository:
     async def latest_rub_rates(self) -> dict[str, Decimal]:
         return {"RUB": Decimal("1"), "USDT": Decimal("80")}
 
-    async def cash_desks_balances(self) -> list[dict]:
-        return [
-            {"city": "екб", "currency_code": "RUB", "balance": Decimal("100000")},
-            {"city": "екб", "currency_code": "USDT", "balance": Decimal("50")},
-        ]
-
-    async def active_schedule_counts(self) -> list[dict]:
-        return [{"city": "екб", "active_count": 3}]
-
-    async def active_exchange_request_count(self) -> int:
-        return 2
-
-    async def today_expenses_total(self) -> Decimal:
-        return Decimal("2500")
+    async def get_snapshot(self, *, business_date: date) -> MainDashboardSnapshot:
+        return _dashboard_snapshot()
 
 
 class FakeRateProvider:
     async def get_rates(self) -> dict[str, Decimal]:
         return {"RUB": Decimal("1"), "USDT": Decimal("81")}
 
+
+class FailingDashboardRepository:
+    async def get_snapshot(self, *, business_date: date) -> MainDashboardSnapshot:
+        raise ConnectionError("database unavailable")
+
+
+class FakeSheetProvider:
     async def get_snapshot(self, *, today: date) -> DashboardSheetSnapshot:
         return _sheet_snapshot()
 
@@ -168,9 +171,11 @@ def test_dashboard_route_returns_live_snapshot_dto() -> None:
     assert data["topMetrics"][0]["value"] == "43 528 093 ₽"
     assert data["topMetrics"][3]["value"] == "26 828 ₽"
     assert data["dailyIndicators"][0]["value"] == "2 029 905 ₽"
-    assert data["dailyIndicators"][2]["value"] == "1 801 307 ₽"
-    assert data["currencies"][1]["code"] == "USDT"
-    assert data["currencies"][1]["factAmount"] == 5579
+    assert data["dailyIndicators"][2]["value"] == "2 003 077 ₽"
+    assert data["currencies"][0]["code"] == "USDT"
+    assert data["currencies"][0]["factAmount"] == "5579"
+    assert data["source"] == "postgres"
+    assert data["warnings"] == []
     assert data["citySummaries"][0]["city"] == "ЕКБ"
     assert data["citySummaries"][0]["rows"][3]["value"] == "812 518 ₽"
     DashboardResponse.model_validate(data)
@@ -195,6 +200,39 @@ def test_dashboard_route_rejects_manager_statistics_access() -> None:
     ErrorResponse.model_validate(response.json())
 
 
+def test_dashboard_route_returns_explicit_service_unavailable_on_db_outage() -> None:
+    app = _app()
+    app.state.dashboard_queries = DashboardQueryService(
+        dashboard_repository=FailingDashboardRepository(),
+        rate_provider=FakeRateProvider(),
+    )
+    response = TestClient(app, raise_server_exceptions=False).get("/api/v1/dashboard")
+
+    assert response.status_code == 503
+    assert ErrorResponse.model_validate(response.json()).detail == (
+        "Postgres dashboard snapshot is unavailable"
+    )
+
+
+def test_dashboard_sheets_mode_does_not_mix_postgres_metrics() -> None:
+    app = _app()
+    app.state.dashboard_queries = DashboardQueryService(
+        dashboard_repository=FailingDashboardRepository(),
+        rate_provider=FakeRateProvider(),
+        sheet_provider=FakeSheetProvider(),
+        source_mode="sheets",
+    )
+    response = TestClient(app).get("/api/v1/dashboard")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "sheets"
+    assert data["topMetrics"][2]["value"] == "—"
+    assert data["warnings"] == [
+        "Operational PostgreSQL metrics are unavailable in sheets mode"
+    ]
+
+
 def _app(*, role: UserRole = UserRole.accountant) -> FastAPI:
     app = FastAPI()
     register_exception_handlers(app)
@@ -203,10 +241,8 @@ def _app(*, role: UserRole = UserRole.accountant) -> FastAPI:
     app.state.client_queries = ClientQueryService(read_repository)
     app.state.balance_queries = BalanceQueryService(read_repository)
     app.state.dashboard_queries = DashboardQueryService(
-        balance_repository=read_repository,
         dashboard_repository=read_repository,
         rate_provider=rate_provider,
-        sheet_provider=rate_provider,
     )
     app.dependency_overrides[get_current_user] = lambda: ApiUser(
         id=1,
@@ -246,35 +282,96 @@ def _transaction_row() -> dict:
     }
 
 
-def _sheet_snapshot() -> DashboardSheetSnapshot:
-    currency = DashboardCurrencySnapshot(
-        amount=Decimal("2597"),
-        rate=Decimal("85.28"),
-        rub_value=Decimal("221467"),
-        client_amount=Decimal("2409"),
-        fact_amount=Decimal("5579"),
+def _dashboard_snapshot() -> MainDashboardSnapshot:
+    currency = MainDashboardCurrency(
+        code="USDT",
+        free_qty=Decimal("2597"),
+        internal_rate=Decimal("85.28"),
+        rub_cost=Decimal("221467"),
+        client_qty=Decimal("2409"),
+        deal_profit_qty=Decimal("573"),
+        fact_qty=Decimal("5579"),
+        observed_qty=Decimal("5600"),
+        gap=Decimal("21"),
+        observed_at=datetime(2026, 7, 31, 8, 0, tzinfo=UTC),
     )
-    return DashboardSheetSnapshot(
-        income=Decimal("2029905"),
-        expense=Decimal("228598"),
-        profit=Decimal("1801307"),
-        turnover=Decimal("36833394"),
-        gap=Decimal("-23"),
-        today_expense=Decimal("26828"),
-        fact_turnover=Decimal("43528093"),
-        total_rub=Decimal("4404248"),
-        total_balances=Decimal("-39123845"),
-        fact_rub=Decimal("-34719596"),
-        rub_cash=Decimal("2081592"),
-        rub_in_currency=Decimal("2322656"),
-        client_balances=Decimal("-38694123"),
-        skyex_balances=Decimal("-429722"),
-        currencies={"USDT": currency},
-        cities={
-            "екб": DashboardCityFinancialSnapshot(
+    return MainDashboardSnapshot(
+        source="postgres",
+        calculated_at=datetime(2026, 7, 31, 8, 0, tzinfo=UTC),
+        data_as_of=datetime(2026, 7, 31, 8, 0, tzinfo=UTC),
+        warnings=(),
+        currencies=(currency,),
+        reconciliation=MainDashboardReconciliation(
+            rub_cash=Decimal("2081592"),
+            rub_in_currency=Decimal("2322656"),
+            total_rub=Decimal("4404248"),
+            client_balances=Decimal("-38694123"),
+            skyex_balances=Decimal("-429722"),
+            total_balances=Decimal("-39123845"),
+            fact_turnover=Decimal("43528093"),
+            accumulated_profit=Decimal("1801307"),
+            invested_capital=Decimal("35032087"),
+            turnover=Decimal("36833394"),
+            gap=Decimal("-23"),
+            fact_rub=Decimal("-34719596"),
+        ),
+        periods=MainDashboardPeriods(
+            daily_income=Decimal("2029905"),
+            daily_expense=Decimal("26828"),
+            daily_profit=Decimal("2003077"),
+            daily_turnover=Decimal("36833394"),
+            monthly_turnover=Decimal("50000000"),
+            profitability=Decimal("0.04"),
+        ),
+        cities=(
+            MainDashboardCity(
+                city="екб",
                 income=Decimal("839883"),
                 expense=Decimal("27365"),
                 profit=Decimal("812518"),
+                active_requests=3,
+            ),
+        ),
+        operations=MainDashboardOperations(
+            active_requests=5,
+            clients_with_balance=1,
+            queued_usdt_qty=Decimal("500"),
+            queue_shortage_qty=Decimal(0),
+            onchain_liquid_qty=Decimal("5600"),
+            profit_in_transit_qty=Decimal("100"),
+        ),
+    )
+
+
+def _sheet_snapshot() -> DashboardSheetSnapshot:
+    currency = DashboardCurrencySnapshot(
+        amount=Decimal("100"),
+        rate=Decimal("80"),
+        rub_value=Decimal("8000"),
+        client_amount=Decimal("10"),
+        fact_amount=Decimal("110"),
+    )
+    return DashboardSheetSnapshot(
+        income=Decimal("300"),
+        expense=Decimal("100"),
+        profit=Decimal("200"),
+        turnover=Decimal("5000"),
+        gap=Decimal("5"),
+        today_expense=Decimal("50"),
+        fact_turnover=Decimal("5005"),
+        total_rub=Decimal("6000"),
+        total_balances=Decimal("995"),
+        fact_rub=Decimal("6995"),
+        rub_cash=Decimal("1000"),
+        rub_in_currency=Decimal("5000"),
+        client_balances=Decimal("900"),
+        skyex_balances=Decimal("95"),
+        currencies={"USDT": currency},
+        cities={
+            "екб": DashboardCityFinancialSnapshot(
+                income=Decimal("300"),
+                expense=Decimal("50"),
+                profit=Decimal("250"),
             )
         },
     )
