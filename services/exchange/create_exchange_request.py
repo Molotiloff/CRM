@@ -116,6 +116,20 @@ class CreateExchangeRequest(_ExchangeUseCaseBase):
                 else f"{params.pay_amount_expr} | {params.note}"
             )
             is_request_chat_origin = is_request_chat(chat_id, self.request_chat_id)
+            deal_data = ExchangeDealData(
+                source_ref=f"{chat_id}:{params.source_message_id}",
+                client_id=client_id,
+                client_req_id=str(req_id),
+                table_req_id=int(table_req_id),
+                client_name=chat_name,
+                creator_name=params.creator_name,
+                recv_code=recv_code,
+                recv_amount=recv_amount,
+                pay_code=pay_code,
+                pay_amount=pay_amount,
+                rate=rate,
+                comment=params.note,
+            )
 
             try:
                 create_result = await self.transaction_service.create(
@@ -137,6 +151,11 @@ class CreateExchangeRequest(_ExchangeUseCaseBase):
                         tracked_currency_codes=tracked_exchange_currencies(
                             chat_id, self.request_chat_id
                         ),
+                        deal_command=(
+                            self.deal_registrar.build_exchange_command(deal_data)
+                            if self.deal_registrar is not None
+                            else None
+                        ),
                     )
                 )
             except Exception as leg_err:
@@ -153,27 +172,6 @@ class CreateExchangeRequest(_ExchangeUseCaseBase):
                 pay_code,
                 rate_text,
             )
-
-            if self.deal_registrar is not None:
-                try:
-                    await self.deal_registrar.register_exchange(
-                        ExchangeDealData(
-                            source_ref=f"{chat_id}:{params.source_message_id}",
-                            client_id=client_id,
-                            client_req_id=str(req_id),
-                            table_req_id=int(table_req_id),
-                            client_name=chat_name,
-                            creator_name=params.creator_name,
-                            recv_code=recv_code,
-                            recv_amount=recv_amount,
-                            pay_code=pay_code,
-                            pay_amount=pay_amount,
-                            rate=rate,
-                            comment=params.note,
-                        )
-                    )
-                except Exception:
-                    log.exception("Failed to mirror exchange request %s to CRM", req_id)
 
             try:
                 client_card_text = (

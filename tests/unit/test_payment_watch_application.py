@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
+from decimal import Decimal
 
+from domain import SettlementReviewStatus
 from services.payment_watch import (
     PaymentWatchPoller,
     PaymentWatchService,
     StartPaymentWatchCommand,
 )
 from services.payment_watch.address_parser import extract_tron_address
-from services.payment_watch.models import PaymentWatchNotification
+from services.payment_watch.models import PaymentWatchNotification, TronTransfer
+from services.payment_watch.settlement_models import SettlementResult
 
 TRON_ADDRESS = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 OUR_ADDRESS = "TVjsyZ7fYF3qLF6BQgPmTEZy1xrNNyVAAA"
@@ -127,3 +131,79 @@ async def test_poller_closes_payment_service_on_shutdown() -> None:
     await poller.stop()
 
     assert service.closed is True
+
+
+class PollRepoStub:
+    async def get_payment_watch_event_hashes(self, *, watch_id: int) -> set[str]:
+        return set()
+
+
+class TransferGatewayStub(TronscanGatewayStub):
+    async def list_usdt_transfers(self, **_: object) -> list[TronTransfer]:
+        return [
+            TronTransfer(
+                tx_hash="tx-after-commit",
+                from_address=OUR_ADDRESS,
+                to_address=TRON_ADDRESS,
+                amount=Decimal("100"),
+                token_symbol="USDT",
+                block_number=1,
+                block_ts=datetime.now(UTC),
+                confirmations=1,
+                confirmed=True,
+            )
+        ]
+
+
+class SettlementServiceStub:
+    def __init__(self) -> None:
+        self.committed = False
+
+    async def settle(self, transfer) -> SettlementResult:
+        self.committed = True
+        return SettlementResult(
+            settlement_id=1,
+            event_id=2,
+            deal_id=3,
+            expected=transfer.amount,
+            actual=transfer.amount,
+            delta=Decimal("0"),
+            status=SettlementReviewStatus.MATCHED,
+            created=True,
+            evidence=transfer,
+        )
+
+
+class ReceiptBuilderStub:
+    def __init__(self, settlement: SettlementServiceStub) -> None:
+        self._settlement = settlement
+
+    def build_main_success(self, **_: object) -> bytes:
+        assert self._settlement.committed is True
+        return b"receipt"
+
+
+async def test_main_receipt_is_built_only_after_settlement_commit() -> None:
+    settlement = SettlementServiceStub()
+    service = PaymentWatchService(
+        repo=PollRepoStub(),
+        tronscan_gateway=TransferGatewayStub(),
+        settlement_service=settlement,
+    )
+    service.receipt_builder = ReceiptBuilderStub(settlement)
+
+    notifications = await service._process_watch(
+        {
+            "id": 10,
+            "address": TRON_ADDRESS,
+            "our_address": OUR_ADDRESS,
+            "phase": "MAIN",
+            "mode": "SINGLE",
+            "started_at": datetime.now(UTC),
+            "chat_id": 20,
+            "reply_message_id": 30,
+            "notice_message_id": None,
+        }
+    )
+
+    assert notifications[0].photo_bytes == b"receipt"

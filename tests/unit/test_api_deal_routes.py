@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -11,8 +12,10 @@ from api.models import ApiUser, UserRole
 from api.routers import deals
 from api.schemas.common import ErrorResponse
 from api.schemas.deals import DealDetailsResponse, DealsPageResponse
-from domain import Deal, DomainStateError
+from domain import Deal, DomainStateError, SettlementReviewStatus
+from domain.accounting_flows import SettlementResolution
 from services.crm.deal_service import DealNotFoundError
+from services.payment_watch.settlement_models import SettlementResult
 
 
 def test_deal_routes_expose_list_create_update_and_status() -> None:
@@ -143,6 +146,40 @@ def test_deal_status_route_returns_conflict_contract() -> None:
     assert error.detail == "Deal status changed concurrently"
 
 
+def test_settlement_review_route_delegates_typed_resolution() -> None:
+    settlement = FakeSettlementService()
+    client = TestClient(_app(FakeDealService(), settlement=settlement))
+
+    response = client.post(
+        "/api/v1/settlements/7/resolve",
+        json={"resolution": "accept_actual", "comment": "confirmed"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "settlementId": 7,
+        "dealId": 1,
+        "status": "resolved",
+        "resolution": "accept_actual",
+        "expected": "100",
+        "actual": "90",
+        "delta": "-10",
+    }
+    assert settlement.command.resolution is SettlementResolution.ACCEPT_ACTUAL
+    assert settlement.command.actor_user_id == 1
+
+
+def test_cancel_and_recreate_requires_replacement_terms() -> None:
+    client = TestClient(_app(FakeDealService()))
+
+    response = client.post(
+        "/api/v1/settlements/7/resolve",
+        json={"resolution": "cancel_and_recreate"},
+    )
+
+    assert response.status_code == 422
+
+
 class FakeDealService:
     def __init__(self) -> None:
         self.row = _deal_row()
@@ -194,16 +231,36 @@ class FakeSourceMutationService:
         return Deal.from_record(self.row)
 
 
+class FakeSettlementService:
+    def __init__(self) -> None:
+        self.command = None
+
+    async def resolve_review(self, command):
+        self.command = command
+        return SettlementResult(
+            settlement_id=command.settlement_id,
+            event_id=2,
+            deal_id=1,
+            expected=Decimal("100"),
+            actual=Decimal("90"),
+            delta=Decimal("-10"),
+            status=SettlementReviewStatus.RESOLVED,
+            created=False,
+            resolution=command.resolution,
+        )
+
 def _app(
     service: FakeDealService,
     *,
     role: UserRole = UserRole.manager,
     source_mutation: FakeSourceMutationService | None = None,
+    settlement: FakeSettlementService | None = None,
 ) -> FastAPI:
     app = FastAPI()
     register_exception_handlers(app)
     app.state.deal_service = service
     app.state.deal_source_mutation_service = source_mutation or FakeSourceMutationService()
+    app.state.deal_settlement_service = settlement or FakeSettlementService()
     app.dependency_overrides[get_current_user] = lambda: ApiUser(
         id=1,
         tg_user_id=42,

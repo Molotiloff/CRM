@@ -204,6 +204,8 @@ CREATE TABLE IF NOT EXISTS payment_watch_events (
 );
 CREATE INDEX IF NOT EXISTS idx_payment_watch_events_watch_created
     ON payment_watch_events(watch_id, created_at, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_watch_events_tx_hash
+    ON payment_watch_events(tx_hash);
 
 
 -- Ордера по курсу (срабатывают при достижении target_ask) -----------------------

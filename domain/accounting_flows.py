@@ -25,6 +25,13 @@ class AccountingLeg:
 class SettlementReviewStatus(StrEnum):
     MATCHED = "matched"
     NEEDS_REVIEW = "needs_review"
+    RESOLVED = "resolved"
+
+
+class SettlementResolution(StrEnum):
+    ACCEPT_ACTUAL = "accept_actual"
+    AMEND_UNPOSTED = "amend_unposted"
+    CANCEL_AND_RECREATE = "cancel_and_recreate"
 
 
 @dataclass(frozen=True, slots=True)

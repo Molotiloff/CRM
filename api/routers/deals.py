@@ -19,7 +19,10 @@ from api.schemas.deals import (
     DealStatusRequest,
     DealType,
     DealUpdateRequest,
+    SettlementResolutionResponse,
+    SettlementReviewResolutionRequest,
 )
+from domain.accounting_flows import SettlementResolution as DomainSettlementResolution
 from services.crm.deal_service import (
     DealCreateCommand,
     DealListFilter,
@@ -32,6 +35,11 @@ from services.crm.deal_source_mutation import (
     DealSourceMutationService,
     ExchangeSourceEdit,
 )
+from services.payment_watch.settlement_models import (
+    ReplacementExchange,
+    ResolveSettlementCommand,
+)
+from services.payment_watch.settlement_service import DealSettlementService
 
 router = APIRouter(prefix="/api/v1", tags=["deals"])
 
@@ -42,6 +50,10 @@ def get_deal_service(request: Request) -> DealService:
 
 def get_deal_source_mutation_service(request: Request) -> DealSourceMutationService:
     return request.app.state.deal_source_mutation_service
+
+
+def get_settlement_service(request: Request) -> DealSettlementService:
+    return request.app.state.deal_settlement_service
 
 
 @router.get(
@@ -195,6 +207,55 @@ async def change_deal_status(
         ),
     )
     return build_deal_details(row)
+
+
+@router.post(
+    "/settlements/{settlement_id}/resolve",
+    response_model=SettlementResolutionResponse,
+    responses=error_responses(
+        status.HTTP_400_BAD_REQUEST,
+        status.HTTP_401_UNAUTHORIZED,
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_409_CONFLICT,
+    ),
+)
+async def resolve_settlement_review(
+    settlement_id: int,
+    payload: SettlementReviewResolutionRequest,
+    user: ApiUser = Depends(require_role(UserRole.manager)),
+    service: DealSettlementService = Depends(get_settlement_service),
+) -> SettlementResolutionResponse:
+    replacement = (
+        ReplacementExchange(
+            request_id=payload.replacement.requestId,
+            table_request_id=payload.replacement.tableRequestId,
+            recv_code=payload.replacement.recvCode.upper(),
+            recv_amount=payload.replacement.recvAmount,
+            pay_code=payload.replacement.payCode.upper(),
+            pay_amount=payload.replacement.payAmount,
+            rate=payload.replacement.rate,
+        )
+        if payload.replacement is not None
+        else None
+    )
+    result = await service.resolve_review(
+        ResolveSettlementCommand(
+            settlement_id=settlement_id,
+            resolution=DomainSettlementResolution(payload.resolution.value),
+            actor_user_id=user.id,
+            comment=payload.comment,
+            replacement=replacement,
+        )
+    )
+    return SettlementResolutionResponse(
+        settlementId=result.settlement_id,
+        dealId=result.deal_id,
+        status=str(result.status),
+        resolution=payload.resolution,
+        expected=result.expected,
+        actual=result.actual,
+        delta=result.delta,
+    )
 
 
 @router.patch(

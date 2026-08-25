@@ -212,6 +212,36 @@ class TestCreateCore:
         assert await balance_of(repo, client_id, "RUB") == Decimal("0.00")
         assert messenger.sent == []
 
+    async def test_crm_deal_failure_rolls_back_ledger_and_source(
+        self,
+        cash_request_repo,
+        exchange_requests_repo,
+        pool,
+        repo,
+        client_id,
+        monkeypatch,
+    ) -> None:
+        async def fail_deal(*args, **kwargs) -> None:
+            raise RuntimeError("deal unavailable")
+
+        monkeypatch.setattr(DealRepository, "create_deal_idempotent", fail_deal)
+        uc = CreateExchangeRequest(
+            **_common_deps(cash_request_repo, pool, exchange_requests_repo),
+            deal_registrar=_deal_registrar(pool),
+        )
+
+        result = await uc.execute_core(
+            _create_params(source_message_id=902),
+            messenger=FakeMessenger(),
+            replier=CollectingReplier(),
+        )
+
+        assert result.ok is False
+        assert await balance_of(repo, client_id, "USDT") == Decimal("0.00")
+        assert await balance_of(repo, client_id, "RUB") == Decimal("0.00")
+        async with pool.acquire() as con:
+            assert await con.fetchval("SELECT COUNT(*) FROM exchange_request_links") == 0
+
 
 class TestCancelCore:
     async def _create(self, create_uc) -> tuple[str, FakeMessenger]:

@@ -87,6 +87,7 @@ from services.exchange.text_builder import ExchangeTextBuilder
 from services.exchange.transaction_service import ExchangeTransactionService
 from services.exchange.wallet_presenter import ExchangeWalletPresenter
 from services.messaging import DeferredMessenger, MessengerPort
+from services.payment_watch.settlement_service import DealSettlementService
 from services.request_table import AsyncSheetsTradeGateway
 from services.unit_of_work import UnitOfWorkFactory, UnitOfWorkPort
 from telegram_adapters import AiogramCashKeyboardPresenter
@@ -198,6 +199,7 @@ class AccountingServices:
     firm_positions: FirmPositionAccountingService
     cash_chat_registry: CashChatRegistrySyncService
     wallet_facts: WalletFactService
+    deal_settlements: DealSettlementService
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,6 +287,7 @@ class ApplicationContainer:
         accounting = AccountingServices(
             firm_positions=FirmPositionAccountingService(unit_of_work_factory),
             wallet_facts=WalletFactService(unit_of_work_factory),
+            deal_settlements=DealSettlementService(unit_of_work_factory),
             cash_chat_registry=CashChatRegistrySyncService(
                 CashChatRegistryRepo(pool),
                 city_cash_chats=config.city_cash_chat_map,

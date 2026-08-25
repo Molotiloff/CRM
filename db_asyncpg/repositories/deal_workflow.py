@@ -98,6 +98,9 @@ class DealWorkflowRepository(ConnectionBoundRepo):
                     ORDER BY block_ts DESC, id DESC
                     LIMIT 1
                 ) pwe ON TRUE
+                JOIN deal_settlements ds
+                  ON ds.payment_event_id = pwe.id
+                 AND ds.review_status IN ('matched', 'resolved')
                 WHERE pw.deal_id = $1 AND pw.status = 'COMPLETED'
                 ORDER BY pw.completed_at DESC NULLS LAST, pw.id DESC
                 LIMIT 1

@@ -3,8 +3,11 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import cast
 
+from db_asyncpg.ports.administration import SettingsRepositoryPort
 from db_asyncpg.ports.payment_watch import PaymentWatchRepositoryPort
+from domain import SettlementReviewStatus
 from observability import NULL_METRICS, MetricsRecorder, measured_operation
 from services.admin_client import USDT_WALLET_SETTING_KEY
 from services.payment_watch.address_parser import extract_tron_address
@@ -15,8 +18,9 @@ from services.payment_watch.models import (
     StartPaymentWatchCommand,
 )
 from services.payment_watch.receipt_image import PaymentReceiptImageBuilder
+from services.payment_watch.settlement_models import ConfirmedTransfer
+from services.payment_watch.settlement_service import DealSettlementService
 from services.payment_watch.tronscan_gateway import TronscanGateway, TronscanGatewayError
-from services.wallets.wallet_service import WalletService
 
 
 class PaymentWatchError(Exception):
@@ -31,15 +35,17 @@ class PaymentWatchService:
         self,
         *,
         repo: PaymentWatchRepositoryPort,
+        settings: SettingsRepositoryPort | None = None,
         tronscan_gateway: TronscanGateway,
-        wallet_service: WalletService | None = None,
+        settlement_service: DealSettlementService | None = None,
         timeout_seconds: int = 15 * 60,
         test_amount: Decimal = Decimal("1"),
         metrics: MetricsRecorder = NULL_METRICS,
     ) -> None:
         self.repo = repo
+        self.settings = settings or cast(SettingsRepositoryPort, repo)
         self.tronscan_gateway = tronscan_gateway
-        self.wallet_service = wallet_service
+        self.settlement_service = settlement_service
         self.timeout_seconds = int(timeout_seconds)
         self.test_amount = Decimal(test_amount)
         self.builder = PaymentWatchMessageBuilder()
@@ -58,7 +64,7 @@ class PaymentWatchService:
         if not address:
             raise PaymentWatchError("В сообщении не найден TRON-кошелёк.")
 
-        our_address_raw = await self.repo.get_setting(USDT_WALLET_SETTING_KEY)
+        our_address_raw = await self.settings.get_setting(USDT_WALLET_SETTING_KEY)
         our_address = (our_address_raw or "").strip()
         if not our_address:
             raise PaymentWatchError("Наш USDT-кошелёк не задан. Сначала используйте /setwallet.")
@@ -232,17 +238,24 @@ class PaymentWatchService:
             if mode == "TEST_THEN_MAIN" and transfer.amount == self.test_amount:
                 continue
 
-            await self.repo.add_payment_watch_event(
-                watch_id=watch_id,
-                tx_hash=transfer.tx_hash,
-                event_type="MAIN",
-                direction=direction,
-                amount=transfer.amount,
-                token_symbol=transfer.token_symbol,
-                confirmations=transfer.confirmations,
-                block_ts=transfer.block_ts,
+            if self.settlement_service is None:
+                raise PaymentWatchError("Settlement service is not configured")
+            settlement = await self.settlement_service.settle(
+                ConfirmedTransfer(
+                    watch_id=watch_id,
+                    tx_hash=transfer.tx_hash,
+                    direction=direction,
+                    amount=transfer.amount,
+                    token_symbol=transfer.token_symbol,
+                    confirmations=transfer.confirmations,
+                    block_ts=transfer.block_ts,
+                    from_address=transfer.from_address,
+                    to_address=transfer.to_address,
+                )
             )
-            await self.repo.complete_payment_watch(watch_id=watch_id)
+            evidence = settlement.evidence
+            if evidence is None:
+                raise PaymentWatchError("Stored settlement evidence is unavailable")
             log.info(
                 "Payment watch %s confirmed (MAIN): tx=%s amount=%s %s confirmations=%s",
                 watch_id, transfer.tx_hash, transfer.amount, transfer.token_symbol, transfer.confirmations,
@@ -250,10 +263,10 @@ class PaymentWatchService:
             photo_bytes: bytes | None = None
             try:
                 photo_bytes = self.receipt_builder.build_main_success(
-                    amount=transfer.amount,
-                    recipient_address=transfer.to_address,
-                    tx_hash=transfer.tx_hash,
-                    block_ts=transfer.block_ts,
+                    amount=evidence.amount,
+                    recipient_address=evidence.to_address,
+                    tx_hash=evidence.tx_hash,
+                    block_ts=evidence.block_ts,
                 )
             except Exception as exc:  # noqa: BLE001 — генерация чека best-effort: при сбое шлём уведомление без картинки
                 log.warning("Payment receipt image disabled: %s", exc)
@@ -261,41 +274,22 @@ class PaymentWatchService:
                 PaymentWatchNotification(
                     chat_id=int(watch["chat_id"]),
                     reply_message_id=int(watch["reply_message_id"]),
-                    text=self.builder.build_main_success(
-                        amount=transfer.amount,
-                        tx_hash=transfer.tx_hash,
+                    text=(
+                        self.builder.build_settlement_review(
+                            expected=settlement.expected,
+                            actual=settlement.actual,
+                            tx_hash=evidence.tx_hash,
+                        )
+                        if settlement.status is SettlementReviewStatus.NEEDS_REVIEW
+                        else self.builder.build_main_success(
+                            amount=evidence.amount,
+                            tx_hash=evidence.tx_hash,
+                        )
                     ),
                     delete_message_id=int(watch["notice_message_id"]) if watch.get("notice_message_id") else None,
                     photo_bytes=photo_bytes,
                     photo_filename=f"payment_receipt_{watch_id}.png" if photo_bytes else None,
                 )
             )
-            if self.wallet_service is not None and (
-                transfer.to_address == our_address or transfer.from_address == our_address
-            ):
-                wallet_amount = transfer.amount if transfer.to_address == our_address else -transfer.amount
-                wallet_result = await self.wallet_service.apply_external_currency_change(
-                    chat_id=int(watch["chat_id"]),
-                    chat_name=str(watch.get("chat_name") or watch["chat_id"]),
-                    code="USDT",
-                    amount=wallet_amount,
-                    expr=f"{transfer.amount.normalize():f}",
-                    source="payment_watch",
-                    idempotency_key=f"payment_watch:{watch_id}:{transfer.tx_hash}:wallet",
-                )
-                log.info(
-                    "Payment watch %s wallet change applied: chat_id=%s amount=%s USDT tx=%s",
-                    watch_id,
-                    int(watch["chat_id"]),
-                    wallet_amount,
-                    transfer.tx_hash,
-                )
-                notifications.append(
-                    PaymentWatchNotification(
-                        chat_id=int(watch["chat_id"]),
-                        reply_message_id=None,
-                        text=wallet_result.message_text,
-                    )
-                )
             break
         return notifications

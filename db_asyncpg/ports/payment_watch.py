@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from services.payment_watch.settlement_models import (
+        ConfirmedTransfer,
+        PaymentEventClaim,
+        SettlementContext,
+        SettlementResult,
+        SettlementReviewContext,
+    )
 
 
 class PaymentWatchRepositoryPort(Protocol):
@@ -72,3 +81,49 @@ class PaymentWatchRepositoryPort(Protocol):
         watch_id: int,
         notice_message_id: int,
     ) -> bool: ...
+
+
+class SettlementRepositoryPort(Protocol):
+    async def get_context_for_update(self, *, watch_id: int) -> SettlementContext | None: ...
+
+    async def claim_main_event(self, transfer: ConfirmedTransfer) -> PaymentEventClaim: ...
+
+    async def get_by_event(self, *, event_id: int) -> SettlementResult | None: ...
+
+    async def create(
+        self,
+        *,
+        context: SettlementContext,
+        transfer: ConfirmedTransfer,
+        event_id: int,
+        expected: Decimal,
+        actual: Decimal,
+        review_status: str,
+    ) -> SettlementResult: ...
+
+    async def complete_watch(self, *, watch_id: int) -> None: ...
+
+    async def enqueue_review_notification(
+        self,
+        *,
+        context: SettlementContext,
+        result: SettlementResult,
+        tx_hash: str,
+    ) -> None: ...
+
+    async def get_review_for_update(
+        self,
+        *,
+        settlement_id: int,
+    ) -> SettlementReviewContext | None: ...
+
+    async def amend_contract_to_actual(self, context: SettlementReviewContext) -> None: ...
+
+    async def resolve_review(
+        self,
+        *,
+        settlement_id: int,
+        resolution: str,
+        actor_user_id: int,
+        comment: str | None,
+    ) -> SettlementResult: ...

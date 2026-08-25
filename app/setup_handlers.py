@@ -131,9 +131,9 @@ def setup_handlers(
         metrics=container.metrics,
     )
     act_counter_service = container.exchange.act_counter
-    payment_watch_wallet_service = WalletService(repo=client_transfer_repo)
     payment_watch_service = PaymentWatchService(
         repo=payment_watch_repo,
+        settings=settings_repo,
         tronscan_gateway=TronscanGateway(
             settings=TronscanSettings(
                 base_url=config.tronscan_api_base_url or "https://apilist.tronscanapi.com",
@@ -141,7 +141,7 @@ def setup_handlers(
                 usdt_contract=config.tronscan_usdt_contract,
             )
         ),
-        wallet_service=payment_watch_wallet_service,
+        settlement_service=container.accounting.deal_settlements,
         timeout_seconds=config.payment_watch_timeout_seconds,
         metrics=container.metrics,
     )

@@ -31,6 +31,12 @@ class DealStatus(StrEnum):
     canceled = "canceled"
 
 
+class SettlementResolution(StrEnum):
+    accept_actual = "accept_actual"
+    amend_unposted = "amend_unposted"
+    cancel_and_recreate = "cancel_and_recreate"
+
+
 class DealCreateRequest(BaseModel):
     dealType: DealType
     city: str
@@ -59,6 +65,41 @@ class DealStatusRequest(BaseModel):
     status: DealStatus
     comment: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class SettlementReplacementRequest(BaseModel):
+    requestId: str = Field(min_length=1)
+    tableRequestId: str = Field(min_length=1)
+    recvCode: str = Field(min_length=1)
+    recvAmount: Decimal = Field(gt=0)
+    payCode: str = Field(min_length=1)
+    payAmount: Decimal = Field(gt=0)
+    rate: Decimal = Field(gt=0)
+
+
+class SettlementReviewResolutionRequest(BaseModel):
+    resolution: SettlementResolution
+    comment: str | None = None
+    replacement: SettlementReplacementRequest | None = None
+
+    @model_validator(mode="after")
+    def validate_replacement(self) -> SettlementReviewResolutionRequest:
+        requires_replacement = self.resolution is SettlementResolution.cancel_and_recreate
+        if requires_replacement != (self.replacement is not None):
+            raise ValueError(
+                "replacement is required only for cancel_and_recreate"
+            )
+        return self
+
+
+class SettlementResolutionResponse(BaseModel):
+    settlementId: int
+    dealId: int
+    status: str
+    resolution: SettlementResolution
+    expected: Decimal
+    actual: Decimal
+    delta: Decimal
 
 
 class DealCancelRequest(BaseModel):

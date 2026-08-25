@@ -126,7 +126,7 @@ async def test_exchange_status_workflow_act_watch_and_tronscan(
     assert awaiting.body.get("payment_watch_id") == watch_id
     assert (await payment_watch_repo.get_payment_watch(watch_id=watch_id))["deal_id"] == deal.id
 
-    await payment_watch_repo.add_payment_watch_event(
+    payment_event_id = await payment_watch_repo.add_payment_watch_event(
         watch_id=watch_id,
         tx_hash="abc123",
         event_type="MAIN",
@@ -137,6 +137,19 @@ async def test_exchange_status_workflow_act_watch_and_tronscan(
         block_ts=datetime.now(UTC),
     )
     await payment_watch_repo.complete_payment_watch(watch_id=watch_id)
+    async with pool.acquire() as con:
+        await con.execute(
+            """
+            INSERT INTO deal_settlements (
+                deal_id, payment_event_id, direction, currency_code,
+                expected_qty, actual_qty, review_status, idempotency_key
+            )
+            VALUES ($1, $2, 'incoming', 'USDT', 25, 25, 'matched', $3)
+            """,
+            deal.id,
+            payment_event_id,
+            f"test:payment_event:{payment_event_id}",
+        )
     completed = await service.change_status(deal.id, _status("done"))
 
     assert completed.tronscan_url is not None

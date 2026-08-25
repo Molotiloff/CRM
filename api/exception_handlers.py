@@ -9,6 +9,7 @@ from api.auth import AuthError
 from api.queries import ClientNotFoundError, DashboardUnavailableError
 from domain import DomainStateError, DomainValidationError
 from services.crm.deal_service import DealNotFoundError
+from services.payment_watch.settlement_service import SettlementError
 
 EXCEPTION_STATUS_MAP: Mapping[type[Exception], int] = {
     AuthError: status.HTTP_401_UNAUTHORIZED,
@@ -17,6 +18,7 @@ EXCEPTION_STATUS_MAP: Mapping[type[Exception], int] = {
     DomainValidationError: status.HTTP_400_BAD_REQUEST,
     DomainStateError: status.HTTP_409_CONFLICT,
     DashboardUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
+    SettlementError: status.HTTP_409_CONFLICT,
 }
 
 

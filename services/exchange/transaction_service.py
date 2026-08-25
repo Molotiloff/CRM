@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from services.act_counter import AppliedExchangeMovement
+from services.crm.deal_service import DealCreateCommand
 from services.unit_of_work import UnitOfWorkFactory
 
 from .balance_service import ExchangeBalanceService
@@ -26,6 +27,7 @@ class CreateExchangeTransaction:
     receive_idempotency_key: str
     pay_idempotency_key: str
     tracked_currency_codes: frozenset[str] | None = None
+    deal_command: DealCreateCommand | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +122,8 @@ class ExchangeTransactionService:
                 table_rate=command.rate,
                 status="active",
             )
+            if command.deal_command is not None:
+                await unit_of_work.deals.create_deal_idempotent(command.deal_command)
             await unit_of_work.commit()
         return CreateExchangeTransactionResult(tuple(balance_result.movements))
 

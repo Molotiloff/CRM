@@ -9,6 +9,7 @@ from db_asyncpg.ports.exchange import ExchangeRequestRepositoryPort
 from db_asyncpg.ports.ledger import TransactionRepositoryPort
 
 if TYPE_CHECKING:
+    from db_asyncpg.ports.payment_watch import SettlementRepositoryPort
     from services.accounting.ports import FirmPositionRepositoryPort, WalletFactRepositoryPort
     from services.crm.deal_service import DealRepositoryPort
 
@@ -20,6 +21,7 @@ class UnitOfWorkPort(Protocol):
     deals: DealRepositoryPort
     firm_positions: FirmPositionRepositoryPort
     wallet_facts: WalletFactRepositoryPort
+    settlements: SettlementRepositoryPort
 
     async def __aenter__(self) -> Self: ...
 

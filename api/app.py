@@ -38,6 +38,7 @@ def create_api_app(
     app.state.deal_event_bus = crm_services.event_bus
     app.state.deal_service = crm_services.deals
     app.state.deal_source_mutation_service = crm_services.source_mutation
+    app.state.deal_settlement_service = container.accounting.deal_settlements
     app.state.metrics = container.metrics
     register_exception_handlers(app)
 

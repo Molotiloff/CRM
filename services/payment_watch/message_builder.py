@@ -73,6 +73,21 @@ class PaymentWatchMessageBuilder:
             f"🔗 <a href=\"{tx_url}\">Ссылка на Tronscan</a>"
         )
 
+    def build_settlement_review(
+        self,
+        *,
+        expected: Decimal,
+        actual: Decimal,
+        tx_hash: str,
+    ) -> str:
+        tx_url = f"https://tronscan.org/#/transaction/{html.escape(tx_hash, quote=True)}"
+        return (
+            "⚠️ Платёж подтверждён, но сумма требует проверки.\n"
+            f"Ожидалось: <code>{_fmt(expected)} USDT</code>\n"
+            f"Фактически: <code>{_fmt(actual)} USDT</code>\n"
+            f"🔗 <a href=\"{tx_url}\">Ссылка на Tronscan</a>"
+        )
+
     def build_timeout(self) -> str:
         return "⌛ Отправка не подтверждена за 15 минут. Продолжить ожидание?"
 

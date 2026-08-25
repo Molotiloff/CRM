@@ -8,7 +8,11 @@ from api.routers import auth, balances, clients, dashboard, deals, health
 from api.schemas.balances import BalancesSnapshotResponse
 from api.schemas.clients import ClientDto, ClientsPageResponse, ClientTransactionsResponse
 from api.schemas.dashboard import DashboardResponse
-from api.schemas.deals import DealDetailsResponse, DealsPageResponse
+from api.schemas.deals import (
+    DealDetailsResponse,
+    DealsPageResponse,
+    SettlementResolutionResponse,
+)
 
 RouteKey = tuple[str, str]
 
@@ -43,6 +47,10 @@ EXPECTED_SUCCESS_MODELS: dict[RouteKey, tuple[int, object]] = {
     ("GET", "/api/v1/deals/{deal_id}"): (200, DealDetailsResponse),
     ("PATCH", "/api/v1/deals/{deal_id}"): (200, DealDetailsResponse),
     ("POST", "/api/v1/deals/{deal_id}/status"): (200, DealDetailsResponse),
+    ("POST", "/api/v1/settlements/{settlement_id}/resolve"): (
+        200,
+        SettlementResolutionResponse,
+    ),
     ("PATCH", "/api/v1/deals/{deal_id}/source"): (200, DealDetailsResponse),
     ("POST", "/api/v1/deals/{deal_id}/cancel"): (200, DealDetailsResponse),
 }
@@ -63,6 +71,9 @@ EXPECTED_ERROR_STATUSES: dict[RouteKey, frozenset[int]] = {
     ("GET", "/api/v1/deals/{deal_id}"): frozenset({401, 403, 404}),
     ("PATCH", "/api/v1/deals/{deal_id}"): DEAL_COMMAND_ERRORS,
     ("POST", "/api/v1/deals/{deal_id}/status"): DEAL_COMMAND_ERRORS,
+    ("POST", "/api/v1/settlements/{settlement_id}/resolve"): frozenset(
+        {400, 401, 403, 409}
+    ),
     ("PATCH", "/api/v1/deals/{deal_id}/source"): DEAL_COMMAND_ERRORS,
     ("POST", "/api/v1/deals/{deal_id}/cancel"): DEAL_COMMAND_ERRORS,
 }

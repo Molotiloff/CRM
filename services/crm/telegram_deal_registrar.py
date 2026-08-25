@@ -48,6 +48,8 @@ class CashDealData:
 
 
 class TelegramDealRegistrarPort(Protocol):
+    def build_exchange_command(self, data: ExchangeDealData) -> DealCreateCommand: ...
+
     async def register_exchange(self, data: ExchangeDealData) -> Deal: ...
 
     async def register_cash(self, data: CashDealData) -> Deal: ...
@@ -61,31 +63,31 @@ class TelegramDealRegistrar:
         self._default_city = default_city
 
     async def register_exchange(self, data: ExchangeDealData) -> Deal:
-        deal_type = self._exchange_type(data.recv_code, data.pay_code)
-        return await self._deal_service.create_source_deal(
-            DealCreateCommand(
-                deal_type=deal_type,
-                city=self._default_city,
-                actor_user_id=None,
-                client_id=data.client_id,
-                source="tg_bot",
-                source_kind="exchange",
-                source_ref=data.source_ref,
-                exchange_client_req_id=data.client_req_id,
-                comment=data.comment,
-                body={
-                    "client_name": data.client_name,
-                    "creator_name": data.creator_name,
-                    "client_req_id": data.client_req_id,
-                    "table_req_id": data.table_req_id,
-                    "recv_code": data.recv_code,
-                    "recv_amount": str(data.recv_amount),
-                    "pay_code": data.pay_code,
-                    "pay_amount": str(data.pay_amount),
-                    "rate": str(data.rate),
-                    "note": data.comment,
-                },
-            )
+        return await self._deal_service.create_source_deal(self.build_exchange_command(data))
+
+    def build_exchange_command(self, data: ExchangeDealData) -> DealCreateCommand:
+        return DealCreateCommand(
+            deal_type=self._exchange_type(data.recv_code, data.pay_code),
+            city=self._default_city,
+            actor_user_id=None,
+            client_id=data.client_id,
+            source="tg_bot",
+            source_kind="exchange",
+            source_ref=data.source_ref,
+            exchange_client_req_id=data.client_req_id,
+            comment=data.comment,
+            body={
+                "client_name": data.client_name,
+                "creator_name": data.creator_name,
+                "client_req_id": data.client_req_id,
+                "table_req_id": data.table_req_id,
+                "recv_code": data.recv_code,
+                "recv_amount": str(data.recv_amount),
+                "pay_code": data.pay_code,
+                "pay_amount": str(data.pay_amount),
+                "rate": str(data.rate),
+                "note": data.comment,
+            },
         )
 
     async def register_cash(self, data: CashDealData) -> Deal:
@@ -127,10 +129,15 @@ class TelegramDealRegistrar:
 
     @classmethod
     def _exchange_type(cls, recv_code: str, pay_code: str) -> str:
-        recv_is_rub = recv_code.upper() in cls._RUB_CODES
-        pay_is_rub = pay_code.upper() in cls._RUB_CODES
-        if recv_is_rub and not pay_is_rub:
-            return "purchase"
-        if pay_is_rub and not recv_is_rub:
-            return "sale"
-        return "conversion"
+        return exchange_type_from_firm_perspective(recv_code, pay_code)
+
+
+def exchange_type_from_firm_perspective(recv_code: str, pay_code: str) -> str:
+    rub_codes = TelegramDealRegistrar._RUB_CODES
+    recv_is_rub = recv_code.upper() in rub_codes
+    pay_is_rub = pay_code.upper() in rub_codes
+    if recv_is_rub and not pay_is_rub:
+        return "sale"
+    if pay_is_rub and not recv_is_rub:
+        return "purchase"
+    return "conversion"

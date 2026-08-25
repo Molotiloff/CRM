@@ -32,6 +32,9 @@ class DealTelegramSyncService:
         self._builder = message_builder or TelegramDealMessageBuilder()
 
     async def deliver(self, item: TgOutboxItem) -> None:
+        if item.kind == "settlement_needs_review":
+            await self._deliver_settlement_review(item.payload)
+            return
         if item.kind not in {"deal_status_changed", "deal_source_updated"}:
             raise ValueError(f"Unsupported Telegram outbox kind: {item.kind}")
         deal_id = int(item.payload["dealId"])
@@ -106,6 +109,18 @@ class DealTelegramSyncService:
                     payload=event_payload,
                 ),
             )
+
+    async def _deliver_settlement_review(self, payload: Mapping[str, Any]) -> None:
+        text = (
+            f"⚠️ Сделка #{payload['dealId']}: сумма платежа требует проверки.\n"
+            f"Ожидалось: {payload['expected']} USDT; "
+            f"фактически: {payload['actual']} USDT; "
+            f"отклонение: {payload['delta']} USDT.\n"
+            "Tronscan: https://tronscan.org/#/transaction/"
+            f"{payload['txHash']}"
+        )
+        for raw_chat_id in payload.get("chatIds", []):
+            await self._messenger.send(chat_id=int(raw_chat_id), text=text)
 
     def _card_targets(
         self,
