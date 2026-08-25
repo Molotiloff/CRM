@@ -91,7 +91,10 @@ class DealTelegramSyncService:
                     chat_id=request_chat_id,
                     text=self._builder.shortage_notification(
                         request_id=request_id,
-                        current_usdt=event_payload.get("actCurrentUsdt", "0"),
+                        current_usdt=event_payload.get(
+                            "usdtFact",
+                            event_payload.get("actCurrentUsdt", "0"),
+                        ),
                         shortage_usdt=event_payload.get("shortageUsdt", "0"),
                     ),
                 )

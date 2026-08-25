@@ -281,3 +281,14 @@ def test_deal_transition_policy_owns_source_specific_status_graph() -> None:
             DealStatus.DONE,
             SourceKind.EXCHANGE,
         )
+
+    DealTransitionPolicy.validate(
+        DealStatus.NEW,
+        DealStatus.READY_FOR_CASH_SETTLEMENT,
+        SourceKind.CASH,
+    )
+    DealTransitionPolicy.validate(
+        DealStatus.READY_FOR_CASH_SETTLEMENT,
+        DealStatus.DONE,
+        SourceKind.CASH,
+    )

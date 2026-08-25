@@ -47,6 +47,7 @@ from services.cash_requests import (
     CashRequestService,
     RequestDealCancelService,
     RequestDealDoneService,
+    RequestDealReadyService,
     RequestIssueService,
     RequestTimeService,
 )
@@ -258,6 +259,7 @@ def setup_handlers(
         request_chat_id=request_chat_id,
         ignore_chat_ids=None,
         city_cash_chats=city_cash_chats,
+        cash_settlement_service=container.accounting.cash_settlements,
     )
 
     accept_short_service = AcceptShortService(
@@ -327,6 +329,15 @@ def setup_handlers(
             repo=repositories.client_wallet_transactions,
             admin_chat_ids=set(admin_chat_list or []),
             admin_user_ids=set(admin_user_list or []),
+            card_parser=container.cash.card_parser,
+        ),
+        request_deal_ready_service=RequestDealReadyService(
+            repo=manager_repo,
+            router_service=container.cash.router,
+            schedule_service=container.cash.schedule,
+            admin_chat_ids=set(admin_chat_list or []),
+            admin_user_ids=set(admin_user_list or []),
+            workflow=container.cash.status_workflow,
             card_parser=container.cash.card_parser,
         ),
         request_deal_done_service=RequestDealDoneService(

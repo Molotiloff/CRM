@@ -16,6 +16,7 @@ class CashRequestStatusCommand(CashRequestCommand):
     card_text: str
     is_caption: bool
     callback_data: str
+    actor_tg_user_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

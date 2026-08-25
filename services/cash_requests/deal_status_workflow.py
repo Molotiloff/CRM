@@ -6,6 +6,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
+from services.accounting.cash_settlement_service import (
+    CashSettlementError,
+    CashSettlementService,
+)
+from services.cash_requests.keyboard_port import (
+    CashKeyboardPort,
+    NullCashKeyboardPresenter,
+)
 from services.cash_requests.request_router_service import RequestRouterService
 from services.cash_requests.schedule_coordinator import CashScheduleCoordinator, ScheduleBoardSync
 from services.cash_requests.workflow_models import CashRequestResult, CashRequestStatusCommand
@@ -14,12 +22,14 @@ from services.messaging import MessengerError, MessengerPort, ReplierPort
 log = logging.getLogger(__name__)
 
 _RE_STATUS_LINE = re.compile(
-    r"^\s*[✅❌]?\s*Сделка\s+(?:проведена|отменена)\s*:\s*(?:<code>)?.+?(?:</code>)?\s*$",
+    r"^\s*[✅❌]?\s*(?:Сделка\s+(?:проведена|отменена)|Готово\s+к\s+расчету)"
+    r"\s*:\s*(?:<code>)?.+?(?:</code>)?\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 
 
 class CashDealStatus(StrEnum):
+    READY = "ready_for_cash_settlement"
     DONE = "done"
     CANCELLED = "cancelled"
 
@@ -38,11 +48,17 @@ class CashDealStatusPolicy:
         return self.alert
 
 
+READY_POLICY = CashDealStatusPolicy(
+    status=CashDealStatus.READY,
+    line_label="Готово к расчету",
+    icon="✅",
+    alert="Заявка готова к расчету",
+)
 DONE_POLICY = CashDealStatusPolicy(
     status=CashDealStatus.DONE,
     line_label="Сделка проведена",
     icon="✅",
-    alert="Сделка проведена",
+    alert="Сделка завершена",
     removed_alert="Сделка завершена",
 )
 CANCEL_POLICY = CashDealStatusPolicy(
@@ -77,10 +93,14 @@ class CashDealStatusWorkflow:
         router_service: RequestRouterService,
         schedule_coordinator: CashScheduleCoordinator,
         card_presenter: CashDealStatusCardPresenter | None = None,
+        keyboards: CashKeyboardPort | None = None,
+        settlement_service: CashSettlementService | None = None,
     ) -> None:
         self._router = router_service
         self._schedule = schedule_coordinator
         self._cards = card_presenter or CashDealStatusCardPresenter()
+        self._keyboards = keyboards or NullCashKeyboardPresenter()
+        self._settlements = settlement_service
 
     async def execute(
         self,
@@ -98,26 +118,60 @@ class CashDealStatusWorkflow:
             await replier.alert(error)
             return CashRequestResult(ok=False, req_id=req_id, error=error)
 
-        removed = await self._schedule.remove(
-            req_id=req_id,
-            city=city,
-            sync_board=sync_schedule_board,
-        )
+        if policy.status is CashDealStatus.READY and self._settlements is not None:
+            try:
+                await self._settlements.mark_ready(
+                    request_id=req_id,
+                    actor_tg_user_id=command.actor_tg_user_id,
+                )
+            except CashSettlementError as exc:
+                await replier.alert(str(exc))
+                return CashRequestResult(ok=False, req_id=req_id, error=str(exc))
+        if policy.status is CashDealStatus.CANCELLED and self._settlements is not None:
+            try:
+                await self._settlements.cancel_request(
+                    request_id=req_id,
+                    actor_tg_user_id=command.actor_tg_user_id,
+                )
+            except CashSettlementError as exc:
+                await replier.alert(str(exc))
+                return CashRequestResult(ok=False, req_id=req_id, error=str(exc))
+        if (
+            policy.status is CashDealStatus.DONE
+            and self._settlements is not None
+            and not await self._settlements.is_settled(request_id=req_id)
+        ):
+            error = "Сначала проведите кассовую команду с номером этой заявки."
+            await replier.alert(error)
+            return CashRequestResult(ok=False, req_id=req_id, error=error)
+
+        removed = False
+        if policy.status is not CashDealStatus.READY:
+            removed = await self._schedule.remove(
+                req_id=req_id,
+                city=city,
+                sync_board=sync_schedule_board,
+            )
         new_text = self._cards.apply(command.card_text, policy)
+        reply_markup = (
+            self._keyboards.completion_action(request_id=req_id)
+            if policy.status is CashDealStatus.READY
+            else None
+        )
         try:
             if command.is_caption:
                 await messenger.edit_caption(
                     chat_id=command.chat_id,
                     message_id=command.message_id,
                     caption=new_text,
-                    reply_markup=None,
+                    reply_markup=reply_markup,
                 )
             else:
                 await messenger.edit_text(
                     chat_id=command.chat_id,
                     message_id=command.message_id,
                     text=new_text,
-                    reply_markup=None,
+                    reply_markup=reply_markup,
                 )
         except MessengerError as exc:
             log.debug("Cash deal status card edit failed (%s); stripping keyboard", exc)

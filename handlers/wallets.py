@@ -9,6 +9,12 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
 from db_asyncpg.ports.workflows import ManagedClientWalletTransactionRepositoryPort
+from domain import DomainStateError, DomainValidationError
+from services.accounting.cash_settlement_models import CashSettlementCommand
+from services.accounting.cash_settlement_service import (
+    CashSettlementError,
+    CashSettlementService,
+)
 from services.wallets import WalletInteractionService
 from services.wallets.models import CurrencyChangeCommand
 from telegram_adapters import ChatLockRegistry, CityCashMediaStore
@@ -23,6 +29,7 @@ from telegram_adapters.message_context import get_chat_name
 from telegram_adapters.statements import handle_stmt_callback
 
 _RE_PUBLIC_WALLET_CMD = r"(?iu)^/кош(?:@\w+)?(?:\s|$)"
+_RE_CASH_REQUEST_ID = re.compile(r"(?iu)^Б-\d{6}$")
 
 
 class WalletsHandler:
@@ -38,6 +45,7 @@ class WalletsHandler:
         request_chat_id: int | None = None,
         ignore_chat_ids: Iterable[int] | None = None,
         city_cash_chats: Mapping[str, int] | None = None,
+        cash_settlement_service: CashSettlementService | None = None,
     ) -> None:
         self.repo = repo
         self.admin_chat_ids = set(admin_chat_ids or [])
@@ -46,6 +54,7 @@ class WalletsHandler:
         self.ignore_chat_ids = set(ignore_chat_ids or [])
         self.city_cash_chats = dict(city_cash_chats or {})
         self.city_cash_chat_ids = set(self.city_cash_chats.values())
+        self.cash_settlement_service = cash_settlement_service
         self._background_tasks: set[asyncio.Task[None]] = set()
         self.city_cash_media_store = city_cash_media_store
         self.chat_locks = chat_locks
@@ -152,6 +161,64 @@ class WalletsHandler:
             await message.answer(str(exc))
             return
         if parsed is None:
+            return
+        request_id = parsed.client_name_for_transfer.strip()
+        if (
+            parsed.is_city_cash
+            and self.cash_settlement_service is not None
+            and request_id
+            and not _RE_CASH_REQUEST_ID.fullmatch(request_id)
+        ):
+            await message.answer(
+                "Для движения клиентской наличности укажите номер заявки, "
+                "например: /usd -125 Б-123456. Связь по имени отключена."
+            )
+            return
+        if (
+            parsed.is_city_cash
+            and self.cash_settlement_service is not None
+            and _RE_CASH_REQUEST_ID.fullmatch(request_id)
+        ):
+            evidence_messages = [message]
+            if message.media_group_id:
+                grouped = self.city_cash_media_store.pop_group(
+                    chat_id=message.chat.id,
+                    media_group_id=message.media_group_id,
+                )
+                if grouped:
+                    evidence_messages = grouped
+            try:
+                settled = await self.cash_settlement_service.settle(
+                    CashSettlementCommand(
+                        request_id=request_id,
+                        city_chat_id=message.chat.id,
+                        command_message_id=message.message_id,
+                        currency=parsed.code,
+                        signed_qty=parsed.amount,
+                        actor_tg_user_id=(
+                            message.from_user.id if message.from_user is not None else None
+                        ),
+                        evidence={
+                            "telegramChatId": message.chat.id,
+                            "telegramMessageId": message.message_id,
+                            "mediaGroupId": message.media_group_id,
+                            "photoFileIds": [
+                                photo.file_id
+                                for evidence_message in evidence_messages
+                                for photo in (evidence_message.photo or [])[-1:]
+                            ],
+                            "comment": parsed.extra_comment,
+                        },
+                    )
+                )
+            except (CashSettlementError, DomainStateError, DomainValidationError) as exc:
+                await message.answer(str(exc))
+                return
+            suffix = " (повтор)" if settled.repeated else ""
+            await message.answer(
+                f"✅ Заявка {settled.request_id} проведена: "
+                f"{settled.actual_qty} {settled.currency}{suffix}."
+            )
             return
         result = await self.interaction_service.build_currency_change_response(
             CurrencyChangeCommand(

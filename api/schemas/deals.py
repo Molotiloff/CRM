@@ -27,6 +27,7 @@ class DealStatus(StrEnum):
     balance_check = "balance_check"
     awaiting_payment = "awaiting_payment"
     in_delivery = "in_delivery"
+    ready_for_cash_settlement = "ready_for_cash_settlement"
     done = "done"
     canceled = "canceled"
 

@@ -12,6 +12,7 @@ from domain import DealStatus
 @pytest.mark.asyncio
 async def test_only_done_deals_are_in_financial_reports_and_typed_views(pool) -> None:
     report_day = date(2026, 8, 19)
+    done_profit = Decimal(tuple(DealStatus).index(DealStatus.DONE) + 1)
     async with pool.acquire() as connection:
         for index, status in enumerate(DealStatus, start=1):
             await connection.execute(
@@ -42,11 +43,11 @@ async def test_only_done_deals_are_in_financial_reports_and_typed_views(pool) ->
         view_rows = await connection.fetch("SELECT status, profit FROM crm_sales ORDER BY id")
 
     assert [(row["status"], row["profit"]) for row in view_rows] == [
-        (DealStatus.DONE.value, Decimal(6))
+        (DealStatus.DONE.value, done_profit)
     ]
 
     pnl = await CrmStatsRepo(pool).daily_pnl(report_day, report_day)
 
     assert len(pnl) == 1
-    assert pnl[0]["sales_income"] == Decimal(6)
+    assert pnl[0]["sales_income"] == done_profit
     assert pnl[0]["deals_income"] == 0

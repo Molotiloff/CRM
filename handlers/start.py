@@ -90,6 +90,8 @@ class StartHandler:
             "<code>/депд</code> (USD), <code>/депе</code> (EUR), <code>/депб</code> (USDW)\n"
             "• Выдача: <code>/выдр</code> (RUB), <code>/выдт</code> (USDT), "
             "<code>/выдд</code> (USD), <code>/выде</code> (EUR), <code>/выдб</code> (USDW)\n\n"
+            "• Проведение в кассе после «Готово к расчету»: "
+            "<code>/USD -125 Б-123456</code>\n\n"
             "📊 Отчёты:\n"
             "• <code>/бк</code> — балансы клиентов (ненулевые)\n"
             "• <code>/бк &lt;ВАЛЮТА&gt; &lt;+|-&gt;</code> — фильтр\n\n"

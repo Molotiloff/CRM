@@ -445,6 +445,8 @@ def test_workflow_packages_expose_only_consumed_entry_points() -> None:
         "RequestDealCancelService",
         "RequestDealDoneParams",
         "RequestDealDoneService",
+        "RequestDealReadyParams",
+        "RequestDealReadyService",
         "RequestIssueParams",
         "RequestIssueService",
         "RequestRouterService",

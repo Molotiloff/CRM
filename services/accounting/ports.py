@@ -6,6 +6,11 @@ from typing import Protocol
 
 from domain import CurrencyCode, FirmPosition, FirmPositionMove, NewFirmPositionMove
 
+from .cash_settlement_models import (
+    CashSettlementCommand,
+    CashSettlementContext,
+    CashSettlementResult,
+)
 from .fulfillment_models import (
     ClientWithdrawalContext,
     EnqueueFulfillment,
@@ -28,6 +33,40 @@ class CashChatRegistryRepositoryPort(Protocol):
         self,
         bindings: tuple[CashChatBinding, ...],
     ) -> CashChatRegistrySyncResult: ...
+
+
+class CashSettlementRepositoryPort(Protocol):
+    async def acquire_request_lock(self, *, request_id: str) -> None: ...
+
+    async def get_request_for_update(
+        self,
+        *,
+        request_id: str,
+    ) -> CashSettlementContext | None: ...
+
+    async def get_context_for_update(
+        self,
+        *,
+        request_id: str,
+        city_chat_id: int,
+    ) -> CashSettlementContext | None: ...
+
+    async def get_by_request(
+        self,
+        *,
+        request_id: str,
+    ) -> CashSettlementResult | None: ...
+
+    async def insert(
+        self,
+        *,
+        context: CashSettlementContext,
+        command: CashSettlementCommand,
+        actual_qty: Decimal,
+        cash_transaction_id: int,
+        client_transaction_id: int,
+        position_move_id: int | None,
+    ) -> CashSettlementResult: ...
 
 
 class FirmPositionRepositoryPort(Protocol):

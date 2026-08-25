@@ -304,6 +304,7 @@ CREATE TABLE IF NOT EXISTS deals (
     counterparty_id BIGINT REFERENCES counterparties(id),
     status TEXT NOT NULL DEFAULT 'new' CHECK (status IN
         ('new','fixed','awaiting_payment','balance_check','in_delivery',
+         'ready_for_cash_settlement',
          'done','canceled')),
     created_by BIGINT REFERENCES users(id),      -- «кто создал сделку» (из PDF)
     source TEXT NOT NULL DEFAULT 'crm'           -- 'tg_bot' | 'crm' | 'import'
@@ -753,6 +754,30 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_usdt_fulfillment_queue_active_deal
     ON usdt_fulfillment_queue(deal_id) WHERE status IN ('queued', 'executing');
 CREATE INDEX IF NOT EXISTS idx_usdt_fulfillment_queue_order
     ON usdt_fulfillment_queue(sequence_no) WHERE status IN ('queued', 'executing');
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cash_deals_request_id
+    ON deals ((body->>'req_id'))
+    WHERE source_kind = 'cash' AND NULLIF(BTRIM(body->>'req_id'), '') IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS cash_settlements (
+    id BIGSERIAL PRIMARY KEY,
+    deal_id BIGINT NOT NULL UNIQUE REFERENCES deals(id),
+    request_id TEXT NOT NULL UNIQUE,
+    request_kind TEXT NOT NULL CHECK (request_kind IN ('dep', 'wd')),
+    city TEXT NOT NULL CHECK (NULLIF(BTRIM(city), '') IS NOT NULL),
+    currency_code TEXT NOT NULL CHECK (currency_code = UPPER(BTRIM(currency_code))),
+    expected_qty NUMERIC(38,8) NOT NULL CHECK (expected_qty > 0),
+    actual_qty NUMERIC(38,8) NOT NULL CHECK (actual_qty > 0),
+    command_chat_id BIGINT NOT NULL,
+    command_message_id BIGINT NOT NULL,
+    cash_transaction_id BIGINT NOT NULL UNIQUE REFERENCES transactions(id),
+    client_transaction_id BIGINT NOT NULL UNIQUE REFERENCES transactions(id),
+    position_move_id BIGINT UNIQUE REFERENCES firm_position_moves(id),
+    evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+    settled_by_tg_user_id BIGINT,
+    settled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (command_chat_id, command_message_id)
+);
 
 CREATE TABLE IF NOT EXISTS profit_usdt_accruals (
     id BIGSERIAL PRIMARY KEY,

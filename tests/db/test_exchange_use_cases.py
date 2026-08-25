@@ -201,6 +201,41 @@ class TestCreateCore:
         assert queue["status"] == "queued"
         assert queue["deal_type"] == "sale"
 
+    async def test_balance_usd_purchase_does_not_touch_cash_or_position(
+        self, cash_request_repo, exchange_requests_repo, pool, repo, client_id
+    ) -> None:
+        await repo.add_currency(client_id, "USD", 2)
+        uc = CreateExchangeRequest(
+            **_common_deps(cash_request_repo, pool, exchange_requests_repo),
+            deal_registrar=_deal_registrar(pool),
+        )
+
+        result = await uc.execute_core(
+            _create_params(
+                source_message_id=904,
+                recv_code="usd",
+                recv_amount_expr="125",
+                pay_code="rub",
+                pay_amount_expr="1000",
+            ),
+            messenger=FakeMessenger(),
+            replier=CollectingReplier(),
+        )
+
+        assert result.ok
+        assert await balance_of(repo, client_id, "USD") == Decimal("125")
+        assert await balance_of(repo, client_id, "RUB") == Decimal("-1000")
+        async with pool.acquire() as connection:
+            assert await connection.fetchval("SELECT COUNT(*) FROM firm_position_moves") == 0
+            assert await connection.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM transactions t
+                JOIN client_accounts a ON a.id = t.account_id
+                JOIN cash_chat_registry c ON c.client_id = a.client_id
+                """
+            ) == 0
+
     async def test_validation_error_no_side_effects(self, create_uc, repo, client_id) -> None:
         messenger = FakeMessenger()
         replier = CollectingReplier()

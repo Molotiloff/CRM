@@ -14,6 +14,7 @@ if TYPE_CHECKING:
         SettlementRepositoryPort,
     )
     from services.accounting.ports import (
+        CashSettlementRepositoryPort,
         FirmPositionRepositoryPort,
         FulfillmentQueueRepositoryPort,
         WalletFactRepositoryPort,
@@ -31,6 +32,7 @@ class UnitOfWorkPort(Protocol):
     settlements: SettlementRepositoryPort
     fulfillment_queue: FulfillmentQueueRepositoryPort
     payment_watches: PaymentWatchRepositoryPort
+    cash_settlements: CashSettlementRepositoryPort
 
     async def __aenter__(self) -> Self: ...
 

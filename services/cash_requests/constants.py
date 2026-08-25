@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 CB_ISSUE_DONE = "req:issue_done"
+CB_DEAL_READY = "cash:deal_ready:req:"
 CB_DEAL_DONE = "cash:deal_done:req:"
 CB_DEAL_CANCEL = "cash:deal_cancel:req:"
 

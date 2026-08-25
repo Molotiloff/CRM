@@ -112,6 +112,7 @@ class DealStatus(StrEnum):
     BALANCE_CHECK = "balance_check"
     AWAITING_PAYMENT = "awaiting_payment"
     IN_DELIVERY = "in_delivery"
+    READY_FOR_CASH_SETTLEMENT = "ready_for_cash_settlement"
     DONE = "done"
     CANCELED = "canceled"
 

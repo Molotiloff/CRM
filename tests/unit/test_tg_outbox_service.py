@@ -63,6 +63,28 @@ async def test_cash_status_uses_saved_card_texts() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cash_completion_notification_contains_actual_receipt_amount() -> None:
+    messenger = FakeMessenger()
+    service = DealTelegramSyncService(
+        repository=FakeCashDeliveryRepository(),
+        messenger=messenger,
+    )
+
+    await service.deliver(
+        _item(
+            status="done",
+            payload={
+                "cashSettlementId": 9,
+                "actualQty": "125",
+                "currency": "USD",
+            },
+        )
+    )
+
+    assert "125 USD" in messenger.sent_to(-100500)[0].text
+
+
+@pytest.mark.asyncio
 async def test_source_update_refreshes_cards_without_status_notification() -> None:
     messenger = FakeMessenger()
     service = DealTelegramSyncService(

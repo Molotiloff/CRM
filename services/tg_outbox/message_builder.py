@@ -16,6 +16,7 @@ STATUS_LABELS = {
     "balance_check": "Сверка баланса",
     "awaiting_payment": "Ожидаем оплату",
     "in_delivery": "Передано в доставку",
+    "ready_for_cash_settlement": "Готово к расчету",
     "done": "Сделка завершена",
     "canceled": "Сделка отменена",
 }
@@ -68,7 +69,7 @@ class TelegramDealMessageBuilder:
         return (
             "<b>На откуп: недостаточно USDT</b>\n"
             f"Заявка: <code>{html.escape(request_id)}</code>\n"
-            f"Остаток по акту: <code>{html.escape(str(current_usdt))} USDT</code>\n"
+            f"USDT факт: <code>{html.escape(str(current_usdt))} USDT</code>\n"
             f"Не хватает: <code>{html.escape(str(shortage_usdt))} USDT</code>"
         )
 
@@ -93,6 +94,10 @@ class TelegramDealMessageBuilder:
 
     @staticmethod
     def _detail(payload: Mapping[str, Any]) -> str | None:
+        if payload.get("cashSettlementId"):
+            amount = html.escape(str(payload.get("actualQty") or "0"))
+            currency = html.escape(str(payload.get("currency") or ""))
+            return f"<b>Фактически проведено</b>: <code>{amount} {currency}</code>"
         if payload.get("insufficientUsdt"):
             shortage = html.escape(str(payload.get("shortageUsdt") or "0"))
             return f"<b>На откуп</b>: не хватает <code>{shortage} USDT</code>"

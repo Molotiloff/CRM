@@ -4,6 +4,7 @@ from types import TracebackType
 
 import asyncpg
 
+from db_asyncpg.repositories.cash_settlements import CashSettlementRepo
 from db_asyncpg.repositories.deals import DealRepository
 from db_asyncpg.repositories.exchange_requests import ExchangeRequestsRepo
 from db_asyncpg.repositories.firm_positions import FirmPositionsRepo
@@ -32,6 +33,7 @@ class AsyncpgUnitOfWork:
         self.settlements: DealSettlementRepo
         self.fulfillment_queue: FulfillmentQueueRepo
         self.payment_watches: PaymentWatchRepo
+        self.cash_settlements: CashSettlementRepo
 
     async def __aenter__(self) -> AsyncpgUnitOfWork:
         self._connection = await self._pool.acquire()
@@ -70,6 +72,10 @@ class AsyncpgUnitOfWork:
             connection=self._connection,
         )
         self.payment_watches = PaymentWatchRepo(
+            self._pool,
+            connection=self._connection,
+        )
+        self.cash_settlements = CashSettlementRepo(
             self._pool,
             connection=self._connection,
         )

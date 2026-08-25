@@ -11,12 +11,18 @@ from services.cash_requests import (
     EditCashRequestParams,
     RequestDealCancelService,
     RequestDealDoneService,
+    RequestDealReadyService,
     RequestIssueParams,
     RequestIssueService,
     RequestTimeParams,
     RequestTimeService,
 )
-from services.cash_requests.constants import CB_DEAL_CANCEL, CB_DEAL_DONE, CB_ISSUE_DONE
+from services.cash_requests.constants import (
+    CB_DEAL_CANCEL,
+    CB_DEAL_DONE,
+    CB_DEAL_READY,
+    CB_ISSUE_DONE,
+)
 from services.cash_requests.workflow_models import CashRequestStatusCommand
 from telegram_adapters import (
     AiogramCallbackReplier,
@@ -40,6 +46,7 @@ class CashRequestsHandler:
         request_service: CashRequestService,
         request_time_service: RequestTimeService,
         request_issue_service: RequestIssueService,
+        request_deal_ready_service: RequestDealReadyService,
         request_deal_done_service: RequestDealDoneService,
         request_deal_cancel_service: RequestDealCancelService,
     ) -> None:
@@ -50,6 +57,7 @@ class CashRequestsHandler:
         self.request_service = request_service
         self.request_time_service = request_time_service
         self.request_issue_service = request_issue_service
+        self.request_deal_ready_service = request_deal_ready_service
         self.request_deal_done_service = request_deal_done_service
         self.request_deal_cancel_service = request_deal_cancel_service
         self._register()
@@ -169,6 +177,9 @@ class CashRequestsHandler:
     async def _done(self, callback: CallbackQuery) -> None:
         await self._status(callback, self.request_deal_done_service)
 
+    async def _ready(self, callback: CallbackQuery) -> None:
+        await self._status(callback, self.request_deal_ready_service)
+
     async def _cancel(self, callback: CallbackQuery) -> None:
         await self._status(callback, self.request_deal_cancel_service)
 
@@ -198,6 +209,9 @@ class CashRequestsHandler:
                 card_text=card_text,
                 is_caption=is_caption,
                 callback_data=callback.data or "",
+                actor_tg_user_id=(
+                    callback.from_user.id if callback.from_user is not None else None
+                ),
             ),
             messenger=messenger,
             replier=AiogramCallbackReplier(callback),
@@ -229,6 +243,10 @@ class CashRequestsHandler:
         self.router.callback_query.register(
             self._issue,
             F.data.startswith(CB_ISSUE_DONE),
+        )
+        self.router.callback_query.register(
+            self._ready,
+            F.data.startswith(CB_DEAL_READY),
         )
         self.router.callback_query.register(
             self._done,

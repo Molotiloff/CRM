@@ -14,6 +14,7 @@ class DealTransitionPolicy:
         DealStatus.BALANCE_CHECK,
         DealStatus.AWAITING_PAYMENT,
         DealStatus.IN_DELIVERY,
+        DealStatus.READY_FOR_CASH_SETTLEMENT,
         DealStatus.DONE,
         DealStatus.CANCELED,
     )
@@ -40,6 +41,7 @@ class DealTransitionPolicy:
                 DealStatus.FIXED,
                 DealStatus.AWAITING_PAYMENT,
                 DealStatus.IN_DELIVERY,
+                DealStatus.READY_FOR_CASH_SETTLEMENT,
                 DealStatus.DONE,
                 DealStatus.CANCELED,
             }
@@ -58,6 +60,9 @@ class DealTransitionPolicy:
             {DealStatus.IN_DELIVERY, DealStatus.DONE, DealStatus.CANCELED}
         ),
         DealStatus.IN_DELIVERY: frozenset(
+            {DealStatus.DONE, DealStatus.CANCELED}
+        ),
+        DealStatus.READY_FOR_CASH_SETTLEMENT: frozenset(
             {DealStatus.DONE, DealStatus.CANCELED}
         ),
         DealStatus.DONE: frozenset(),

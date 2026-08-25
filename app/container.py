@@ -62,6 +62,7 @@ from services.accounting import (
     FirmPositionAccountingService,
     WalletFactService,
 )
+from services.accounting.cash_settlement_service import CashSettlementService
 from services.accounting.fulfillment_service import FulfillmentQueueService
 from services.act_counter import ActCounterService
 from services.cash_requests.calculator import CashRequestCalculator
@@ -202,6 +203,7 @@ class AccountingServices:
     wallet_facts: WalletFactService
     deal_settlements: DealSettlementService
     fulfillment_queue: FulfillmentQueueService
+    cash_settlements: CashSettlementService
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,11 +274,8 @@ class ApplicationContainer:
         )
         cash_calculator = CashRequestCalculator()
         cash_card_parser = CashCardParser()
-        cash_card_presenter = CashCardPresenter(AiogramCashKeyboardPresenter())
-        cash_status_workflow = CashDealStatusWorkflow(
-            router_service=request_router,
-            schedule_coordinator=cash_schedule_coordinator,
-        )
+        cash_keyboards = AiogramCashKeyboardPresenter()
+        cash_card_presenter = CashCardPresenter(cash_keyboards)
 
         def build_unit_of_work() -> UnitOfWorkPort:
             return AsyncpgUnitOfWork(pool)
@@ -287,6 +286,16 @@ class ApplicationContainer:
         if config.request_chat_id is not None:
             request_chat_ids.add(config.request_chat_id)
         firm_positions = FirmPositionAccountingService(unit_of_work_factory)
+        cash_settlements = CashSettlementService(
+            unit_of_work_factory,
+            position_service=firm_positions,
+        )
+        cash_status_workflow = CashDealStatusWorkflow(
+            router_service=request_router,
+            schedule_coordinator=cash_schedule_coordinator,
+            keyboards=cash_keyboards,
+            settlement_service=cash_settlements,
+        )
         fulfillment_queue = FulfillmentQueueService(
             unit_of_work_factory,
             position_service=firm_positions,
@@ -300,6 +309,7 @@ class ApplicationContainer:
                 fulfillment_queue_service=fulfillment_queue,
             ),
             fulfillment_queue=fulfillment_queue,
+            cash_settlements=cash_settlements,
             cash_chat_registry=CashChatRegistrySyncService(
                 CashChatRegistryRepo(pool),
                 city_cash_chats=config.city_cash_chat_map,

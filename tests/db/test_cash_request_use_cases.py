@@ -229,7 +229,9 @@ class TestEditCashCore:
 
 
 class TestIssueCashCore:
-    async def test_dep_applies_balance_and_strips_keyboard(self, repo, client_id) -> None:
+    async def test_legacy_issue_button_does_not_apply_financial_write(
+        self, repo, client_id
+    ) -> None:
         service = RequestIssueService(
             repo=repo,
             admin_chat_ids=set(),
@@ -250,13 +252,10 @@ class TestIssueCashCore:
             replier=replier,
         )
 
-        assert result.ok and result.op_kind == "dep"
-        assert await balance_of(repo, client_id, "RUB") == 1000
-        assert any(
-            edit.chat_id == CLIENT_CHAT and edit.message_id == 555 for edit in messenger.edits
-        )
-        assert any("Баланс" in reply for reply in replier.replies)
-        assert "Отмечено как выдано" in replier.alerts
+        assert not result.ok and result.op_kind == "dep"
+        assert await balance_of(repo, client_id, "RUB") == 0
+        assert messenger.edits == []
+        assert any("кассовую команду" in alert for alert in replier.alerts)
 
     async def test_missing_account_is_reported_without_balance_change(
         self, repo, client_id
@@ -284,7 +283,7 @@ class TestIssueCashCore:
         assert not result.ok
         assert await balance_of(repo, client_id, "RUB") == 0
         assert messenger.edits == []
-        assert any("Счёт EUR не найден" in reply for reply in replier.replies)
+        assert any("кассовую команду" in alert for alert in replier.alerts)
 
 
 class TestDealStatusCore:
