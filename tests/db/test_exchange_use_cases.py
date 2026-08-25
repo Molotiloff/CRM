@@ -165,6 +165,42 @@ class TestCreateCore:
         assert delivery_context["exchange_client_message_id"] == link["client_message_id"]
         assert delivery_context["exchange_request_message_id"] == link["request_message_id"]
 
+    async def test_firm_usdt_sale_enqueues_without_position_or_wallet_fact_write(
+        self, cash_request_repo, exchange_requests_repo, pool, client_id
+    ) -> None:
+        uc = CreateExchangeRequest(
+            **_common_deps(cash_request_repo, pool, exchange_requests_repo),
+            deal_registrar=_deal_registrar(pool),
+        )
+
+        result = await uc.execute_core(
+            _create_params(
+                source_message_id=903,
+                recv_code="rub",
+                recv_amount_expr="9000",
+                pay_code="usdt",
+                pay_amount_expr="100",
+            ),
+            messenger=FakeMessenger(),
+            replier=CollectingReplier(),
+        )
+
+        assert result.ok is True
+        async with pool.acquire() as con:
+            queue = await con.fetchrow(
+                """
+                SELECT q.request_kind, q.qty, q.status, d.deal_type
+                FROM usdt_fulfillment_queue q
+                JOIN deals d ON d.id = q.deal_id
+                """
+            )
+            assert await con.fetchval("SELECT COUNT(*) FROM firm_position_moves") == 0
+            assert await con.fetchval("SELECT COUNT(*) FROM firm_wallet_fact_snapshots") == 0
+        assert queue["request_kind"] == "sale"
+        assert queue["qty"] == Decimal("100")
+        assert queue["status"] == "queued"
+        assert queue["deal_type"] == "sale"
+
     async def test_validation_error_no_side_effects(self, create_uc, repo, client_id) -> None:
         messenger = FakeMessenger()
         replier = CollectingReplier()

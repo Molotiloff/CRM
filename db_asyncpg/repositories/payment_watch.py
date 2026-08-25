@@ -20,6 +20,7 @@ class PaymentWatchRepo(BaseRepo):
         phase: str,
         status: str,
         timeout_at: datetime,
+        deal_id: int | None = None,
     ) -> int:
         timeout_norm = self._normalize_dt(timeout_at)
         async with self._connection() as con:
@@ -36,9 +37,10 @@ class PaymentWatchRepo(BaseRepo):
                         mode,
                         phase,
                         status,
-                        timeout_at
+                        timeout_at,
+                        deal_id
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                     RETURNING id
                     """,
                     int(chat_id),
@@ -51,6 +53,7 @@ class PaymentWatchRepo(BaseRepo):
                     str(phase).upper(),
                     str(status).upper(),
                     timeout_norm,
+                    deal_id,
                 )
                 return int(row["id"])
 

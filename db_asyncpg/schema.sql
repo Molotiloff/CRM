@@ -737,10 +737,16 @@ CREATE TABLE IF NOT EXISTS usdt_fulfillment_queue (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     reordered_at TIMESTAMPTZ,
     reordered_by BIGINT REFERENCES users(id),
+    payment_watch_id BIGINT UNIQUE REFERENCES payment_watches(id),
+    payment_event_id BIGINT UNIQUE REFERENCES payment_watch_events(id),
+    position_move_id BIGINT UNIQUE REFERENCES firm_position_moves(id),
+    completed_by BIGINT REFERENCES users(id),
+    wallet_source TEXT CHECK (wallet_source IN ('firm_wallet', 'external')),
     completed_at TIMESTAMPTZ,
     cancel_reason TEXT,
     CHECK ((reordered_at IS NULL) = (reordered_by IS NULL)),
     CHECK ((status = 'completed') = (completed_at IS NOT NULL)),
+    CHECK (status <> 'completed' OR payment_event_id IS NOT NULL),
     CHECK (status <> 'canceled' OR NULLIF(BTRIM(cancel_reason), '') IS NOT NULL)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_usdt_fulfillment_queue_active_deal

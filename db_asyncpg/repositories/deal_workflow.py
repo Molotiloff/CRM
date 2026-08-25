@@ -7,48 +7,63 @@ from db_asyncpg.repositories.base import ConnectionBoundRepo
 
 
 class DealWorkflowRepository(ConnectionBoundRepo):
-    async def get_act_balance_check(self, deal_id: int) -> dict[str, Any] | None:
+    async def get_fulfillment_balance_check(
+        self,
+        deal_id: int,
+    ) -> dict[str, Any] | None:
         async with self._connection() as con:
             row = await con.fetchrow(
                 """
-                SELECT erl.request_chat_id,
-                       COALESCE((
-                           SELECT t.balance_after
-                           FROM clients c
-                           JOIN client_accounts a ON a.client_id = c.id
-                           JOIN transactions t ON t.account_id = a.id
-                           WHERE c.chat_id = erl.request_chat_id
-                             AND a.currency_code = 'USDT'
-                           ORDER BY t.id DESC
-                           LIMIT 1
-                       ), 0) AS current_amount,
-                       COALESCE(SUM(
-                           CASE WHEN art.direction = 'OUT' AND a.currency_code = 'USDT'
-                                THEN ABS(t.amount) ELSE 0 END
-                       ), 0) AS required_amount
+                WITH queue AS (
+                    SELECT COALESCE(SUM(qty), 0) AS queued_qty
+                    FROM usdt_fulfillment_queue
+                    WHERE status IN ('queued', 'executing')
+                ), fact AS (
+                    SELECT COALESCE((
+                        SELECT actual_qty
+                        FROM firm_wallet_fact_snapshots
+                        WHERE currency_code = 'USDT'
+                        ORDER BY observed_at DESC, id DESC
+                        LIMIT 1
+                    ), 0) AS usdt_fact
+                )
+                SELECT COALESCE(
+                           erl.request_chat_id,
+                           erl.client_chat_id,
+                           c.chat_id
+                       ) AS request_chat_id,
+                       item.qty AS required_amount,
+                       queue.queued_qty,
+                       fact.usdt_fact
                 FROM deals d
-                JOIN exchange_request_links erl
+                JOIN usdt_fulfillment_queue item ON item.deal_id = d.id
+                LEFT JOIN clients c ON c.id = d.client_id
+                LEFT JOIN exchange_request_links erl
                   ON erl.client_req_id = d.exchange_client_req_id
-                LEFT JOIN act_request_transactions art
-                  ON art.req_id = d.exchange_client_req_id
-                 AND art.status = 'ACTIVE'
-                LEFT JOIN transactions t ON t.id = art.transaction_id
-                LEFT JOIN client_accounts a ON a.id = t.account_id
+                CROSS JOIN queue
+                CROSS JOIN fact
                 WHERE d.id = $1
-                GROUP BY erl.request_chat_id
+                  AND item.status IN ('queued', 'executing')
                 """,
                 deal_id,
             )
-        if row is None or row["request_chat_id"] is None:
+        if row is None:
             return None
-        current = Decimal(str(row["current_amount"]))
+        fact = Decimal(str(row["usdt_fact"]))
+        queued = Decimal(str(row["queued_qty"]))
         required = Decimal(str(row["required_amount"]))
         return {
-            "request_chat_id": int(row["request_chat_id"]),
-            "current_amount": current,
+            "request_chat_id": (
+                int(row["request_chat_id"])
+                if row["request_chat_id"] is not None
+                else None
+            ),
             "required_amount": required,
-            "shortage_amount": max(-current, Decimal("0")),
-            "insufficient": current < 0,
+            "queued_qty": queued,
+            "usdt_fact": fact,
+            "shortage_amount": max(queued - fact, Decimal("0")),
+            "onchain_liquid_qty": max(fact - queued, Decimal("0")),
+            "insufficient": queued > fact,
         }
 
     async def resolve_payment_watch(

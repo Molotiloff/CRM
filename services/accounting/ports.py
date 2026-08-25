@@ -6,6 +6,13 @@ from typing import Protocol
 
 from domain import CurrencyCode, FirmPosition, FirmPositionMove, NewFirmPositionMove
 
+from .fulfillment_models import (
+    ClientWithdrawalContext,
+    EnqueueFulfillment,
+    FulfillmentQueueItem,
+    FulfillmentQueueSummary,
+    ReorderFulfillment,
+)
 from .models import (
     CashChatBinding,
     CashChatRegistrySyncResult,
@@ -84,3 +91,59 @@ class WalletFactRepositoryPort(Protocol):
 
 class AccountingDashboardReadPort(Protocol):
     async def get_snapshot(self, *, business_date: date) -> MainDashboardSnapshot: ...
+
+
+class FulfillmentQueueRepositoryPort(Protocol):
+    async def acquire_client_lock(self, chat_id: int) -> None: ...
+
+    async def client_withdrawal_context(
+        self,
+        *,
+        chat_id: int,
+    ) -> ClientWithdrawalContext | None: ...
+
+    async def enqueue(self, command: EnqueueFulfillment) -> FulfillmentQueueItem: ...
+
+    async def list_active(self) -> list[FulfillmentQueueItem]: ...
+
+    async def reorder(self, command: ReorderFulfillment) -> FulfillmentQueueItem: ...
+
+    async def summary(self) -> FulfillmentQueueSummary: ...
+
+    async def cancel(
+        self,
+        *,
+        item_id: int,
+        reason: str,
+    ) -> FulfillmentQueueItem: ...
+
+    async def next_for_client_for_update(
+        self,
+        *,
+        chat_id: int,
+    ) -> FulfillmentQueueItem | None: ...
+
+    async def executing_qty(self) -> Decimal: ...
+
+    async def mark_executing(
+        self,
+        *,
+        item_id: int,
+        watch_id: int,
+    ) -> FulfillmentQueueItem: ...
+
+    async def get_by_deal_for_update(
+        self,
+        *,
+        deal_id: int,
+    ) -> FulfillmentQueueItem | None: ...
+
+    async def complete(
+        self,
+        *,
+        item_id: int,
+        payment_event_id: int,
+        position_move_id: int | None,
+        actor_user_id: int | None,
+        wallet_source: str,
+    ) -> FulfillmentQueueItem: ...

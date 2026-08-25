@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
+from services.accounting.fulfillment_models import (
+    EnqueueFulfillment,
+    FulfillmentRequestKind,
+)
 from services.act_counter import AppliedExchangeMovement
 from services.crm.deal_service import DealCreateCommand
 from services.unit_of_work import UnitOfWorkFactory
@@ -123,7 +127,20 @@ class ExchangeTransactionService:
                 status="active",
             )
             if command.deal_command is not None:
-                await unit_of_work.deals.create_deal_idempotent(command.deal_command)
+                deal, _ = await unit_of_work.deals.create_deal_idempotent(
+                    command.deal_command
+                )
+                if str(command.deal_command.deal_type) == "sale" and (
+                    command.pay_code.upper() == "USDT"
+                ):
+                    await unit_of_work.fulfillment_queue.enqueue(
+                        EnqueueFulfillment(
+                            deal_id=deal.id,
+                            request_kind=FulfillmentRequestKind.SALE,
+                            qty=command.pay_amount,
+                            actor_user_id=command.deal_command.actor_user_id,
+                        )
+                    )
             await unit_of_work.commit()
         return CreateExchangeTransactionResult(tuple(balance_result.movements))
 

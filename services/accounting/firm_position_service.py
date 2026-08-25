@@ -16,7 +16,7 @@ from domain import (
     firm_position_currency,
 )
 from domain.accounting import accounting_decimal
-from services.unit_of_work import UnitOfWorkFactory
+from services.unit_of_work import UnitOfWorkFactory, UnitOfWorkPort
 
 from .models import (
     PositionCommand,
@@ -79,7 +79,12 @@ class FirmPositionAccountingService:
             expected_qty=qty,
         )
 
-    async def record_sale(self, command: RecordSale) -> FirmPositionMove:
+    async def record_sale(
+        self,
+        command: RecordSale,
+        *,
+        unit_of_work: UnitOfWorkPort | None = None,
+    ) -> FirmPositionMove:
         qty = self._positive(command.qty, field="sale quantity")
 
         def calculate(current: FirmPosition) -> tuple[Decimal, Decimal, Decimal]:
@@ -94,6 +99,7 @@ class FirmPositionAccountingService:
             kind=FirmPositionMoveKind.SALE,
             calculate=calculate,
             expected_qty=-qty,
+            unit_of_work=unit_of_work,
         )
 
     async def record_adjustment(self, command: RecordAdjustment) -> FirmPositionMove:
@@ -155,37 +161,69 @@ class FirmPositionAccountingService:
         calculate: MoveCalculation,
         expected_qty: Decimal,
         reason: str | None = None,
+        unit_of_work: UnitOfWorkPort | None = None,
     ) -> FirmPositionMove:
         currency = firm_position_currency(command.currency)
-        async with self._unit_of_work_factory() as unit_of_work:
-            repository = unit_of_work.firm_positions
-            await repository.acquire_currency_lock(currency)
-            repeated = await repository.get_by_idempotency_key(command.idempotency_key)
-            if repeated is not None:
-                self._validate_replay(
-                    repeated,
-                    command=command,
-                    currency=currency,
-                    kind=kind,
-                    expected_qty=expected_qty,
-                )
-                return repeated
-            current = await repository.get_current(currency)
-            calculated = calculate(current)
-            qty, rub_amount = calculated[:2]
-            entry_rate = calculated[2] if len(calculated) == 3 else None
-            move = self._new_move(
-                command,
-                current=current,
+        if unit_of_work is not None:
+            return await self._record_in_uow(
+                unit_of_work,
+                command=command,
+                currency=currency,
                 kind=kind,
-                qty=qty,
-                rub_amount=rub_amount,
-                entry_rate=entry_rate,
+                calculate=calculate,
+                expected_qty=expected_qty,
                 reason=reason,
             )
-            result = await repository.append(move)
+        async with self._unit_of_work_factory() as unit_of_work:
+            result = await self._record_in_uow(
+                unit_of_work,
+                command=command,
+                currency=currency,
+                kind=kind,
+                calculate=calculate,
+                expected_qty=expected_qty,
+                reason=reason,
+            )
             await unit_of_work.commit()
             return result
+
+    async def _record_in_uow(
+        self,
+        unit_of_work: UnitOfWorkPort,
+        *,
+        command: PositionCommand,
+        currency: CurrencyCode,
+        kind: FirmPositionMoveKind,
+        calculate: MoveCalculation,
+        expected_qty: Decimal,
+        reason: str | None,
+    ) -> FirmPositionMove:
+        repository = unit_of_work.firm_positions
+        await repository.acquire_currency_lock(currency)
+        repeated = await repository.get_by_idempotency_key(command.idempotency_key)
+        if repeated is not None:
+            self._validate_replay(
+                repeated,
+                command=command,
+                currency=currency,
+                kind=kind,
+                expected_qty=expected_qty,
+            )
+            return repeated
+        current = await repository.get_current(currency)
+        calculated = calculate(current)
+        qty, rub_amount = calculated[:2]
+        entry_rate = calculated[2] if len(calculated) == 3 else None
+        move = self._new_move(
+            command,
+            current=current,
+            kind=kind,
+            qty=qty,
+            rub_amount=rub_amount,
+            entry_rate=entry_rate,
+            reason=reason,
+        )
+        return await repository.append(move)
 
     def _new_move(
         self,

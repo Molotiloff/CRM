@@ -142,6 +142,7 @@ def setup_handlers(
             )
         ),
         settlement_service=container.accounting.deal_settlements,
+        fulfillment_queue_service=container.accounting.fulfillment_queue,
         timeout_seconds=config.payment_watch_timeout_seconds,
         metrics=container.metrics,
     )

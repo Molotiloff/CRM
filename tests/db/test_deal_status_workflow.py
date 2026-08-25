@@ -2,11 +2,18 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from functools import partial
 
 import pytest
 
 from db_asyncpg.repositories.deal_workflow import DealWorkflowRepository
 from db_asyncpg.repositories.deals import DealRepository
+from db_asyncpg.uow import AsyncpgUnitOfWork
+from services.accounting.fulfillment_models import (
+    EnqueueFulfillment,
+    FulfillmentRequestKind,
+)
+from services.accounting.fulfillment_service import FulfillmentQueueService
 from services.crm.deal_events import DealEventBus
 from services.crm.deal_service import (
     DealCreateCommand,
@@ -21,11 +28,10 @@ REQUEST_CHAT = -777001
 
 
 @pytest.mark.asyncio
-async def test_exchange_status_workflow_act_watch_and_tronscan(
+async def test_exchange_status_workflow_queue_watch_and_tronscan(
     pool,
     repo,
     exchange_requests_repo,
-    act_counter_repo,
     payment_watch_repo,
     client_id,
 ) -> None:
@@ -64,23 +70,13 @@ async def test_exchange_status_workflow_act_watch_and_tronscan(
             },
         )
     )
-    act_client_id = await repo.ensure_client(chat_id=REQUEST_CHAT, name="ACT")
-    await repo.add_currency(act_client_id, "USDT", 3)
-    act_tx_id = await repo.withdraw(
-        client_id=act_client_id,
-        currency_code="USDT",
-        amount=Decimal("25"),
-        comment="test shortage",
-        source="test",
-        idempotency_key="test:act:out",
-    )
-    await act_counter_repo.link_act_request_transaction(
-        req_id="12345678",
-        table_req_id="100001",
-        request_chat_id=REQUEST_CHAT,
-        request_message_id=202,
-        transaction_id=act_tx_id,
-        direction="OUT",
+    queue = FulfillmentQueueService(partial(AsyncpgUnitOfWork, pool))
+    await queue.enqueue(
+        EnqueueFulfillment(
+            deal_id=deal.id,
+            request_kind=FulfillmentRequestKind.SALE,
+            qty=Decimal("25"),
+        )
     )
 
     service = DealService(
@@ -96,14 +92,16 @@ async def test_exchange_status_workflow_act_watch_and_tronscan(
     with pytest.raises(DealValidationError, match="insufficient"):
         await service.change_status(deal.id, _status("awaiting_payment"))
 
-    await repo.deposit(
-        client_id=act_client_id,
-        currency_code="USDT",
-        amount=Decimal("100"),
-        comment="replenished",
-        source="test",
-        idempotency_key="test:act:in",
-    )
+    async with pool.acquire() as con:
+        await con.execute(
+            """
+            INSERT INTO firm_wallet_fact_snapshots(
+                currency_code, actual_qty, observed_at, source, idempotency_key
+            )
+            VALUES ('USDT', 100, $1, 'manual', 'workflow-queue-fact')
+            """,
+            datetime.now(UTC),
+        )
     rechecked = await service.change_status(deal.id, _status("balance_check"))
     assert rechecked.body.get("insufficient_usdt") is False
 

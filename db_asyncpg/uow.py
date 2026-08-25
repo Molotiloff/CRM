@@ -7,6 +7,8 @@ import asyncpg
 from db_asyncpg.repositories.deals import DealRepository
 from db_asyncpg.repositories.exchange_requests import ExchangeRequestsRepo
 from db_asyncpg.repositories.firm_positions import FirmPositionsRepo
+from db_asyncpg.repositories.fulfillment_queue import FulfillmentQueueRepo
+from db_asyncpg.repositories.payment_watch import PaymentWatchRepo
 from db_asyncpg.repositories.request_schedule import RequestScheduleRepo
 from db_asyncpg.repositories.settlements import DealSettlementRepo
 from db_asyncpg.repositories.transactions import TransactionsRepo
@@ -28,6 +30,8 @@ class AsyncpgUnitOfWork:
         self.firm_positions: FirmPositionsRepo
         self.wallet_facts: WalletFactsRepo
         self.settlements: DealSettlementRepo
+        self.fulfillment_queue: FulfillmentQueueRepo
+        self.payment_watches: PaymentWatchRepo
 
     async def __aenter__(self) -> AsyncpgUnitOfWork:
         self._connection = await self._pool.acquire()
@@ -58,6 +62,14 @@ class AsyncpgUnitOfWork:
             connection=self._connection,
         )
         self.settlements = DealSettlementRepo(
+            self._pool,
+            connection=self._connection,
+        )
+        self.fulfillment_queue = FulfillmentQueueRepo(
+            self._pool,
+            connection=self._connection,
+        )
+        self.payment_watches = PaymentWatchRepo(
             self._pool,
             connection=self._connection,
         )

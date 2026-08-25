@@ -106,12 +106,14 @@ class FakeWorkflowRepository:
     def __init__(self, *, insufficient: bool = False) -> None:
         self.insufficient = insufficient
 
-    async def get_act_balance_check(self, deal_id: int):
+    async def get_fulfillment_balance_check(self, deal_id: int):
         return {
             "request_chat_id": -777001,
-            "current_amount": Decimal("-25" if self.insufficient else "75"),
+            "usdt_fact": Decimal("75" if self.insufficient else "125"),
+            "queued_qty": Decimal("100"),
             "required_amount": Decimal("100"),
             "shortage_amount": Decimal("25" if self.insufficient else "0"),
+            "onchain_liquid_qty": Decimal("0" if self.insufficient else "25"),
             "insufficient": self.insufficient,
         }
 

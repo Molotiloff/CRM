@@ -28,6 +28,7 @@ class PaymentWatchRepositoryPort(Protocol):
         phase: str,
         status: str,
         timeout_at: datetime,
+        deal_id: int | None = None,
     ) -> int: ...
 
     async def get_payment_watch(self, *, watch_id: int) -> dict | None: ...

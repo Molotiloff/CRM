@@ -99,6 +99,7 @@ class DealSettlementRepo(ConnectionBoundRepo):
                 """
                 SELECT ds.id, ds.payment_event_id, ds.deal_id, ds.expected_qty,
                        ds.actual_qty, ds.delta_qty, ds.review_status, ds.resolution,
+                       ds.currency_code,
                        ds.evidence::text AS evidence,
                        pwe.watch_id, pwe.tx_hash, pwe.direction AS event_direction,
                        pwe.amount AS event_amount, pwe.token_symbol,
@@ -215,20 +216,34 @@ class DealSettlementRepo(ConnectionBoundRepo):
             row = await con.fetchrow(
                 """
                 SELECT ds.id, ds.payment_event_id, ds.deal_id, ds.expected_qty,
-                       ds.actual_qty, ds.delta_qty, ds.review_status, ds.resolution,
-                       pwe.direction AS event_direction,
+                       ds.actual_qty, ds.delta_qty, ds.currency_code,
+                       ds.review_status, ds.resolution,
+                       ds.evidence::text AS evidence,
+                       pwe.watch_id, pwe.tx_hash, pwe.direction AS event_direction,
+                       pwe.amount AS event_amount, pwe.token_symbol,
+                       pwe.confirmations, pwe.block_ts,
                        d.status AS deal_status, d.client_id, d.city, d.source_ref,
-                       d.body::text AS body,
-                       erl.client_req_id, erl.table_req_id,
-                       erl.table_in_cur, erl.table_in_amount,
-                       erl.table_out_cur, erl.table_out_amount, erl.table_rate
+                       d.source_kind, d.body::text AS body,
+                       COALESCE(erl.client_req_id, d.source_ref) AS client_req_id,
+                       COALESCE(erl.table_req_id, d.source_ref) AS table_req_id,
+                       COALESCE(erl.table_in_cur, d.body->>'recv_code') AS table_in_cur,
+                       COALESCE(erl.table_in_amount,
+                                NULLIF(d.body->>'recv_amount', '')::numeric)
+                           AS table_in_amount,
+                       COALESCE(erl.table_out_cur, d.body->>'pay_code') AS table_out_cur,
+                       COALESCE(erl.table_out_amount,
+                                NULLIF(d.body->>'pay_amount', '')::numeric)
+                           AS table_out_amount,
+                       COALESCE(erl.table_rate,
+                                NULLIF(d.body->>'rate', '')::numeric,
+                                1) AS table_rate
                 FROM deal_settlements ds
                 JOIN payment_watch_events pwe ON pwe.id = ds.payment_event_id
                 JOIN deals d ON d.id = ds.deal_id
-                JOIN exchange_request_links erl
+                LEFT JOIN exchange_request_links erl
                   ON erl.client_req_id = d.exchange_client_req_id
                 WHERE ds.id = $1
-                FOR UPDATE OF ds, d, erl
+                FOR UPDATE OF ds, d
                 """,
                 settlement_id,
             )
@@ -238,6 +253,8 @@ class DealSettlementRepo(ConnectionBoundRepo):
         return SettlementReviewContext(
             result=result,
             event_direction=str(row["event_direction"]),
+            settlement_currency=str(row["currency_code"]).upper(),
+            is_exchange=str(row["source_kind"] or "") == "exchange",
             deal_status=str(row["deal_status"]),
             client_id=int(row["client_id"]),
             city=str(row["city"]),
@@ -253,19 +270,20 @@ class DealSettlementRepo(ConnectionBoundRepo):
         )
 
     async def amend_contract_to_actual(self, context: SettlementReviewContext) -> None:
-        leg = "recv" if context.event_direction == "IN" else "pay"
+        leg = _review_leg(context)
         amount_column = "table_in_amount" if leg == "recv" else "table_out_amount"
         body_key = f"{leg}_amount"
         async with self._connection() as con:
-            await con.execute(
-                f"""
-                UPDATE exchange_request_links
-                SET {amount_column} = $2, updated_at = NOW()
-                WHERE client_req_id = $1
-                """,
-                context.request_id,
-                context.result.actual,
-            )
+            if context.is_exchange:
+                await con.execute(
+                    f"""
+                    UPDATE exchange_request_links
+                    SET {amount_column} = $2, updated_at = NOW()
+                    WHERE client_req_id = $1
+                    """,
+                    context.request_id,
+                    context.result.actual,
+                )
             await con.execute(
                 """
                 UPDATE deals
@@ -337,3 +355,11 @@ def _result(row, *, created: bool) -> SettlementResult:
         ),
         evidence=evidence,
     )
+
+
+def _review_leg(context: SettlementReviewContext) -> str:
+    recv_matches = context.recv_code == context.settlement_currency
+    pay_matches = context.pay_code == context.settlement_currency
+    if recv_matches != pay_matches:
+        return "recv" if recv_matches else "pay"
+    return "pay" if context.event_direction == "IN" else "recv"

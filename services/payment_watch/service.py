@@ -9,6 +9,11 @@ from db_asyncpg.ports.administration import SettingsRepositoryPort
 from db_asyncpg.ports.payment_watch import PaymentWatchRepositoryPort
 from domain import SettlementReviewStatus
 from observability import NULL_METRICS, MetricsRecorder, measured_operation
+from services.accounting.fulfillment_models import StartFulfillmentExecution
+from services.accounting.fulfillment_service import (
+    FulfillmentQueueError,
+    FulfillmentQueueService,
+)
 from services.admin_client import USDT_WALLET_SETTING_KEY
 from services.payment_watch.address_parser import extract_tron_address
 from services.payment_watch.message_builder import PaymentWatchMessageBuilder
@@ -38,6 +43,7 @@ class PaymentWatchService:
         settings: SettingsRepositoryPort | None = None,
         tronscan_gateway: TronscanGateway,
         settlement_service: DealSettlementService | None = None,
+        fulfillment_queue_service: FulfillmentQueueService | None = None,
         timeout_seconds: int = 15 * 60,
         test_amount: Decimal = Decimal("1"),
         metrics: MetricsRecorder = NULL_METRICS,
@@ -46,6 +52,7 @@ class PaymentWatchService:
         self.settings = settings or cast(SettingsRepositoryPort, repo)
         self.tronscan_gateway = tronscan_gateway
         self.settlement_service = settlement_service
+        self.fulfillment_queue_service = fulfillment_queue_service
         self.timeout_seconds = int(timeout_seconds)
         self.test_amount = Decimal(test_amount)
         self.builder = PaymentWatchMessageBuilder()
@@ -81,18 +88,37 @@ class PaymentWatchService:
         mode = "TEST_THEN_MAIN" if command.test_mode else "SINGLE"
         phase = "TEST" if command.test_mode else "MAIN"
         timeout_at = datetime.now(UTC) + timedelta(seconds=self.timeout_seconds)
-        watch_id = await self.repo.create_payment_watch(
-            chat_id=command.chat_id,
-            chat_name=command.chat_name,
-            reply_message_id=command.reply_message_id,
-            address=address,
-            our_address=our_address,
-            created_by_user_id=command.created_by_user_id,
-            mode=mode,
-            phase=phase,
-            status="WATCHING",
-            timeout_at=timeout_at,
-        )
+        if self.fulfillment_queue_service is not None:
+            try:
+                started = await self.fulfillment_queue_service.start_execution(
+                    StartFulfillmentExecution(
+                        chat_id=command.chat_id,
+                        chat_name=command.chat_name,
+                        reply_message_id=command.reply_message_id,
+                        address=address,
+                        our_address=our_address,
+                        actor_user_id=command.created_by_user_id,
+                        mode=mode,
+                        phase=phase,
+                        timeout_at=timeout_at,
+                    )
+                )
+            except FulfillmentQueueError as exc:
+                raise PaymentWatchError(str(exc)) from exc
+            watch_id = started.watch_id
+        else:
+            watch_id = await self.repo.create_payment_watch(
+                chat_id=command.chat_id,
+                chat_name=command.chat_name,
+                reply_message_id=command.reply_message_id,
+                address=address,
+                our_address=our_address,
+                created_by_user_id=command.created_by_user_id,
+                mode=mode,
+                phase=phase,
+                status="WATCHING",
+                timeout_at=timeout_at,
+            )
         return PaymentWatchStarted(
             watch_id=watch_id,
             message_text=self.builder.build_started(

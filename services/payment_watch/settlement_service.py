@@ -4,6 +4,8 @@ from decimal import Decimal
 
 from domain import DealStatus, SettlementReviewStatus, compare_settlement
 from domain.accounting_flows import SettlementResolution
+from services.accounting.fulfillment_models import FulfillmentRequestKind
+from services.accounting.fulfillment_service import FulfillmentQueueService
 from services.crm.deal_service import DealCreateCommand, DealStatusCommand
 from services.crm.telegram_deal_registrar import exchange_type_from_firm_perspective
 from services.exchange.ledger import (
@@ -30,8 +32,14 @@ class SettlementError(RuntimeError):
 class DealSettlementService:
     """Reconciles one confirmed blockchain fact with one contractual deal leg."""
 
-    def __init__(self, unit_of_work_factory: UnitOfWorkFactory) -> None:
+    def __init__(
+        self,
+        unit_of_work_factory: UnitOfWorkFactory,
+        *,
+        fulfillment_queue_service: FulfillmentQueueService | None = None,
+    ) -> None:
         self._unit_of_work_factory = unit_of_work_factory
+        self._fulfillment = fulfillment_queue_service
 
     async def settle(self, transfer: ConfirmedTransfer) -> SettlementResult:
         async with self._unit_of_work_factory() as unit_of_work:
@@ -41,7 +49,14 @@ class DealSettlementService:
             if context is None:
                 raise SettlementError("Payment watch is not linked to an exchange deal")
 
-            expected = self._expected_quantity(context, transfer)
+            fulfillment = await unit_of_work.fulfillment_queue.get_by_deal_for_update(
+                deal_id=context.deal_id
+            )
+            expected = (
+                fulfillment.qty
+                if fulfillment is not None
+                else self._expected_quantity(context, transfer)
+            )
             claim = await unit_of_work.settlements.claim_main_event(transfer)
             if not claim.created:
                 existing = await unit_of_work.settlements.get_by_event(
@@ -62,19 +77,39 @@ class DealSettlementService:
                 review_status=str(comparison.status),
             )
             if comparison.status is SettlementReviewStatus.NEEDS_REVIEW:
-                await self._apply_actual_delta(
-                    unit_of_work.transactions,
-                    context=context,
-                    transfer=transfer,
-                    delta=comparison.delta,
-                    event_id=claim.event_id,
-                )
+                if (
+                    fulfillment is None
+                    or fulfillment.request_kind
+                    is not FulfillmentRequestKind.CLIENT_WITHDRAWAL
+                ):
+                    await self._apply_actual_delta(
+                        unit_of_work.transactions,
+                        context=context,
+                        transfer=transfer,
+                        delta=comparison.delta,
+                        event_id=claim.event_id,
+                    )
                 await unit_of_work.settlements.enqueue_review_notification(
                     context=context,
                     result=result,
                     tx_hash=transfer.tx_hash,
                 )
-            elif context.deal_status == str(DealStatus.AWAITING_PAYMENT):
+            else:
+                if self._fulfillment is not None:
+                    await self._fulfillment.complete_confirmed_in_uow(
+                        unit_of_work,
+                        deal_id=context.deal_id,
+                        payment_event_id=claim.event_id,
+                        qty=transfer.amount,
+                        observed_at=transfer.block_ts,
+                        actor_user_id=None,
+                        client_id=context.client_id,
+                        source_firm_wallet=transfer.direction == "IN",
+                    )
+            if (
+                comparison.status is SettlementReviewStatus.MATCHED
+                and context.deal_status == str(DealStatus.AWAITING_PAYMENT)
+            ):
                 await unit_of_work.deals.change_status(
                     context.deal_id,
                     DealStatusCommand(
@@ -147,13 +182,28 @@ class DealSettlementService:
             await unit_of_work.commit()
             return result
 
-    @staticmethod
     async def _complete_reviewed_deal(
+        self,
         unit_of_work,
         *,
         context: SettlementReviewContext,
         command: ResolveSettlementCommand,
     ) -> None:
+        if self._fulfillment is not None:
+            evidence = context.result.evidence
+            if evidence is None:
+                raise SettlementError("Settlement evidence is unavailable")
+            await self._fulfillment.complete_confirmed_in_uow(
+                unit_of_work,
+                deal_id=context.result.deal_id,
+                payment_event_id=context.result.event_id,
+                qty=context.result.actual,
+                observed_at=evidence.block_ts,
+                actor_user_id=command.actor_user_id,
+                client_id=context.client_id,
+                source_firm_wallet=evidence.direction == "IN",
+                allow_quantity_mismatch=True,
+            )
         changed = await unit_of_work.deals.change_status(
             context.result.deal_id,
             DealStatusCommand(
@@ -178,6 +228,8 @@ class DealSettlementService:
         replacement: ReplacementExchange,
         command: ResolveSettlementCommand,
     ) -> None:
+        if not context.is_exchange:
+            raise SettlementError("Only exchange settlements can be recreated")
         if await unit_of_work.exchange_requests.get_exchange_request_link(
             client_req_id=replacement.request_id
         ) is not None:
@@ -190,16 +242,15 @@ class DealSettlementService:
             raise SettlementError(
                 f"Replacement table request {replacement.table_request_id} already exists"
             )
-        effective_recv = (
-            context.result.actual
-            if context.event_direction == "IN"
-            else context.recv_amount
+        settled_recv_leg = (
+            context.recv_code == context.settlement_currency
+            and context.pay_code != context.settlement_currency
+        ) or (
+            context.recv_code == context.pay_code == context.settlement_currency
+            and context.event_direction == "OUT"
         )
-        effective_pay = (
-            context.result.actual
-            if context.event_direction == "OUT"
-            else context.pay_amount
-        )
+        effective_recv = context.result.actual if settled_recv_leg else context.recv_amount
+        effective_pay = context.pay_amount if settled_recv_leg else context.result.actual
         cancel_commands, _, _ = plan_cancel_ledger(
             request_id=context.request_id,
             chat_id=context.result.deal_id,
@@ -306,17 +357,18 @@ class DealSettlementService:
         context: SettlementContext,
         transfer: ConfirmedTransfer,
     ) -> Decimal:
-        if transfer.direction == "IN":
-            currency, quantity = context.recv_code, context.recv_amount
-        elif transfer.direction == "OUT":
-            currency, quantity = context.pay_code, context.pay_amount
-        else:
+        if transfer.direction not in {"IN", "OUT"}:
             raise SettlementError(f"Unsupported payment direction: {transfer.direction}")
-        if currency != transfer.token_symbol.upper():
+        token = transfer.token_symbol.upper()
+        recv_matches = context.recv_code == token
+        pay_matches = context.pay_code == token
+        if not recv_matches and not pay_matches:
             raise SettlementError(
-                f"Payment currency {transfer.token_symbol} does not match expected {currency}"
+                f"Payment currency {transfer.token_symbol} does not match either deal leg"
             )
-        return quantity
+        if recv_matches != pay_matches:
+            return context.recv_amount if recv_matches else context.pay_amount
+        return context.pay_amount if transfer.direction == "IN" else context.recv_amount
 
     @staticmethod
     async def _apply_actual_delta(
@@ -331,7 +383,11 @@ class DealSettlementService:
             return
         # Contractual legs are already posted at request creation. Only the delta
         # is applied here, so blockchain evidence can never repeat the full leg.
-        expected_action_is_deposit = transfer.direction == "IN"
+        token = transfer.token_symbol.upper()
+        recv_leg = context.recv_code == token and context.pay_code != token
+        if context.recv_code == context.pay_code == token:
+            recv_leg = transfer.direction == "OUT"
+        expected_action_is_deposit = recv_leg
         use_deposit = expected_action_is_deposit == (delta > 0)
         operation = transactions.deposit if use_deposit else transactions.withdraw
         await operation(

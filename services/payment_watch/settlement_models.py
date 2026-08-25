@@ -87,6 +87,8 @@ class ResolveSettlementCommand:
 class SettlementReviewContext:
     result: SettlementResult
     event_direction: str
+    settlement_currency: str
+    is_exchange: bool
     deal_status: str
     client_id: int
     city: str

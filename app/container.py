@@ -62,6 +62,7 @@ from services.accounting import (
     FirmPositionAccountingService,
     WalletFactService,
 )
+from services.accounting.fulfillment_service import FulfillmentQueueService
 from services.act_counter import ActCounterService
 from services.cash_requests.calculator import CashRequestCalculator
 from services.cash_requests.card_parser import CashCardParser
@@ -200,6 +201,7 @@ class AccountingServices:
     cash_chat_registry: CashChatRegistrySyncService
     wallet_facts: WalletFactService
     deal_settlements: DealSettlementService
+    fulfillment_queue: FulfillmentQueueService
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,10 +286,20 @@ class ApplicationContainer:
         request_chat_ids = set(config.cash_chat_map.values())
         if config.request_chat_id is not None:
             request_chat_ids.add(config.request_chat_id)
+        firm_positions = FirmPositionAccountingService(unit_of_work_factory)
+        fulfillment_queue = FulfillmentQueueService(
+            unit_of_work_factory,
+            position_service=firm_positions,
+            default_city=config.default_city,
+        )
         accounting = AccountingServices(
-            firm_positions=FirmPositionAccountingService(unit_of_work_factory),
+            firm_positions=firm_positions,
             wallet_facts=WalletFactService(unit_of_work_factory),
-            deal_settlements=DealSettlementService(unit_of_work_factory),
+            deal_settlements=DealSettlementService(
+                unit_of_work_factory,
+                fulfillment_queue_service=fulfillment_queue,
+            ),
+            fulfillment_queue=fulfillment_queue,
             cash_chat_registry=CashChatRegistrySyncService(
                 CashChatRegistryRepo(pool),
                 city_cash_chats=config.city_cash_chat_map,

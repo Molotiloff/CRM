@@ -16,7 +16,10 @@ from .deal_service import DealStatusPreparation, DealValidationError
 
 
 class DealWorkflowRepositoryPort(Protocol):
-    async def get_act_balance_check(self, deal_id: int) -> dict[str, Any] | None: ...
+    async def get_fulfillment_balance_check(
+        self,
+        deal_id: int,
+    ) -> dict[str, Any] | None: ...
 
     async def resolve_payment_watch(
         self,
@@ -105,36 +108,43 @@ class DealStatusPolicy:
             str(body.get("pay_code") or "").upper(),
         }
         if not is_exchange or "USDT" not in currencies:
-            payload["actCheckApplicable"] = False
+            payload["queueCheckApplicable"] = False
             return DealStatusPreparation(
                 payload=payload,
-                body_patch={"insufficient_usdt": False, "act_check_applicable": False},
+                body_patch={"insufficient_usdt": False, "queue_check_applicable": False},
             )
 
-        result = await self._repository.get_act_balance_check(deal.id)
+        result = await self._repository.get_fulfillment_balance_check(deal.id)
         if result is None:
-            raise DealValidationError("ACT balance data is unavailable for this deal")
-        current = Decimal(result["current_amount"])
+            raise DealValidationError("USDT fulfillment queue data is unavailable")
+        fact = Decimal(result["usdt_fact"])
+        queued = Decimal(result["queued_qty"])
         required = Decimal(result["required_amount"])
         shortage = Decimal(result["shortage_amount"])
+        liquid = Decimal(result["onchain_liquid_qty"])
         insufficient = bool(result["insufficient"])
         payload.update(
             {
-                "actCheckApplicable": True,
-                "actCurrentUsdt": str(current),
+                "queueCheckApplicable": True,
+                "queuedUsdt": str(queued),
+                "usdtFact": str(fact),
                 "requiredUsdt": str(required),
                 "shortageUsdt": str(shortage),
+                "onchainLiquidUsdt": str(liquid),
                 "insufficientUsdt": insufficient,
-                "requestChatId": int(result["request_chat_id"]),
             }
         )
+        if result["request_chat_id"] is not None:
+            payload["requestChatId"] = int(result["request_chat_id"])
         return DealStatusPreparation(
             payload=payload,
             body_patch={
-                "act_check_applicable": True,
-                "act_current_usdt": str(current),
+                "queue_check_applicable": True,
+                "queued_usdt": str(queued),
+                "usdt_fact": str(fact),
                 "required_usdt": str(required),
                 "shortage_usdt": str(shortage),
+                "onchain_liquid_usdt": str(liquid),
                 "insufficient_usdt": insufficient,
             },
         )
@@ -149,7 +159,7 @@ class DealStatusPolicy:
         body = deal.body
         if bool(body.get("insufficient_usdt")):
             raise DealValidationError(
-                "ACT balance is insufficient; repeat balance check after replenishment"
+                "USDT fact is insufficient; repeat queue check after replenishment"
             )
         raw_watch_id = payload.get("paymentWatchId") or payload.get("payment_watch_id")
         try:
