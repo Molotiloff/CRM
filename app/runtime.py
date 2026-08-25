@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 @dataclass(slots=True)
 class BotRuntimeServices:
     daily_balances_scheduler: AsyncLifecycle | None = None
+    profit_capitalization_scheduler: AsyncLifecycle | None = None
     market_ws_service: RapiraWsService | None = None
     orderbook_service: OrderbookService | None = None
     rate_order_service: RateOrderService | None = None
@@ -59,6 +60,7 @@ class BotRuntimeServices:
     def _lifecycle_components(self) -> tuple[LifecycleComponent, ...]:
         candidates: tuple[tuple[str, AsyncLifecycle | None], ...] = (
             ("Daily balances scheduler", self.daily_balances_scheduler),
+            ("Profit capitalization scheduler", self.profit_capitalization_scheduler),
             ("AML queue service", self.aml_queue_service),
             ("Payment watch poller", self.payment_watch_poller),
             ("Telegram outbox worker", self.tg_outbox_worker),

@@ -537,9 +537,12 @@ CREATE TABLE IF NOT EXISTS internal_account_moves (
     deal_id BIGINT REFERENCES deals(id),
     actor_user_id BIGINT REFERENCES users(id),
     comment TEXT,
+    idempotency_key TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_internal_account_moves_acc ON internal_account_moves(account_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_internal_account_moves_idempotency
+    ON internal_account_moves(idempotency_key) WHERE idempotency_key IS NOT NULL;
 
 -- Посещаемость (лист «Посещаемость»: сотрудники × дни + переработки) --------------
 CREATE TABLE IF NOT EXISTS attendance (

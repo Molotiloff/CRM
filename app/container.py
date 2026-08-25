@@ -60,6 +60,8 @@ from observability import InMemoryMetrics, MetricsPort
 from services.accounting import (
     CashChatRegistrySyncService,
     FirmPositionAccountingService,
+    PartnerPurchaseAllocationService,
+    ProfitAccrualService,
     WalletFactService,
 )
 from services.accounting.cash_settlement_service import CashSettlementService
@@ -204,6 +206,8 @@ class AccountingServices:
     deal_settlements: DealSettlementService
     fulfillment_queue: FulfillmentQueueService
     cash_settlements: CashSettlementService
+    partner_allocations: PartnerPurchaseAllocationService
+    profit_accruals: ProfitAccrualService
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,6 +314,11 @@ class ApplicationContainer:
             ),
             fulfillment_queue=fulfillment_queue,
             cash_settlements=cash_settlements,
+            partner_allocations=PartnerPurchaseAllocationService(
+                unit_of_work_factory,
+                position_service=firm_positions,
+            ),
+            profit_accruals=ProfitAccrualService(unit_of_work_factory),
             cash_chat_registry=CashChatRegistrySyncService(
                 CashChatRegistryRepo(pool),
                 city_cash_chats=config.city_cash_chat_map,

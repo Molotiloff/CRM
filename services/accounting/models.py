@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 
@@ -187,3 +187,114 @@ class RecordAdjustment(PositionCommand):
 class ReversePositionMove(PositionCommand):
     move_id: int
     reason: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RecordProfitCapitalization(PositionCommand):
+    qty: Decimal
+    rate: Decimal
+
+
+class PartnerAllocationDestination(StrEnum):
+    FIRM_WALLET = "firm_wallet"
+    CLIENT_DIRECT = "client_direct"
+
+
+class PartnerAllocationStatus(StrEnum):
+    ACTIVE = "active"
+    SETTLED = "settled"
+    REVERSED = "reversed"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PartnerPurchaseContext:
+    deal_id: int
+    qty: Decimal
+    rate: Decimal
+    currency: CurrencyCode
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PartnerAllocation:
+    id: int
+    purchase_deal_id: int
+    sale_deal_id: int | None
+    destination: PartnerAllocationDestination
+    qty: Decimal
+    status: PartnerAllocationStatus
+    idempotency_key: str
+    transfer_watch_id: int | None = None
+    position_move_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AllocatePartnerPurchase:
+    purchase_deal_id: int
+    qty: Decimal
+    idempotency_key: str
+    destination: PartnerAllocationDestination
+    actor_user_id: int | None = None
+    sale_deal_id: int | None = None
+    network: str | None = None
+    partner_address: str | None = None
+    destination_address: str | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SettlePartnerTransfer:
+    allocation_id: int
+    actual_qty: Decimal
+    tx_hash: str
+    event_index: int
+    confirmed_at: datetime
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MarketQuote:
+    price: Decimal
+    source: str
+    symbol: str
+    observed_at: datetime
+
+
+class ProfitSettlementStatus(StrEnum):
+    IN_TRANSIT = "in_transit"
+    RECEIVED = "received"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ProfitAccrual:
+    id: int
+    deal_id: int
+    qty: Decimal
+    idempotency_key: str
+    settlement_status: ProfitSettlementStatus
+    created_at: datetime
+    valuation_rate: Decimal | None = None
+    capitalization_move_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AccrueUsdtProfit:
+    deal_id: int
+    qty: Decimal
+    idempotency_key: str
+    settlement_status: ProfitSettlementStatus = ProfitSettlementStatus.IN_TRANSIT
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ManualProfitQuote:
+    price: Decimal
+    actor_user_id: int
+    reason: str
+    observed_at: datetime
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ProfitCapitalizationResult:
+    business_date: date
+    qty: Decimal
+    rub_value: Decimal
+    accrual_count: int
+    position_move_id: int | None
+    repeated: bool

@@ -22,6 +22,7 @@ from .models import (
     PositionCommand,
     RecordAdjustment,
     RecordOpening,
+    RecordProfitCapitalization,
     RecordPurchase,
     RecordSale,
     ReversePositionMove,
@@ -69,14 +70,36 @@ class FirmPositionAccountingService:
             reason=command.reason,
         )
 
-    async def record_purchase(self, command: RecordPurchase) -> FirmPositionMove:
+    async def record_purchase(
+        self,
+        command: RecordPurchase,
+        *,
+        unit_of_work: UnitOfWorkPort | None = None,
+    ) -> FirmPositionMove:
         qty = self._positive(command.qty, field="purchase quantity")
         rate = self._positive(command.rate, field="purchase rate")
         return await self._record(
             command,
             kind=FirmPositionMoveKind.PURCHASE,
+            calculate=lambda _current: (qty, qty * rate, rate),
+            expected_qty=qty,
+            unit_of_work=unit_of_work,
+        )
+
+    async def record_profit_capitalization(
+        self,
+        command: RecordProfitCapitalization,
+        *,
+        unit_of_work: UnitOfWorkPort | None = None,
+    ) -> FirmPositionMove:
+        qty = self._positive(command.qty, field="profit quantity")
+        rate = self._positive(command.rate, field="profit valuation rate")
+        return await self._record(
+            command,
+            kind=FirmPositionMoveKind.PROFIT_CAPITALIZATION,
             calculate=lambda _current: (qty, qty * rate),
             expected_qty=qty,
+            unit_of_work=unit_of_work,
         )
 
     async def record_sale(

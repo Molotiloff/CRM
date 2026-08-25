@@ -6,6 +6,7 @@ import json
 import logging
 import ssl
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
 import certifi
@@ -61,6 +62,7 @@ class RapiraWsService(ManagedTaskLifecycle):
         self.best_ask: Decimal | None = None
         self.asks: list[dict] = []
         self.bids: list[dict] = []
+        self.orderbook_observed_at: datetime | None = None
 
         self._ssl_context = ssl.create_default_context(cafile=certifi.where())
 
@@ -145,6 +147,7 @@ class RapiraWsService(ManagedTaskLifecycle):
             self.asks = normalized
         elif direction == "BUY":
             self.bids = normalized
+            self.orderbook_observed_at = datetime.now(UTC)
         else:
             return
 

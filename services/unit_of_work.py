@@ -17,6 +17,8 @@ if TYPE_CHECKING:
         CashSettlementRepositoryPort,
         FirmPositionRepositoryPort,
         FulfillmentQueueRepositoryPort,
+        PartnerAllocationRepositoryPort,
+        ProfitAccrualRepositoryPort,
         WalletFactRepositoryPort,
     )
     from services.crm.deal_service import DealRepositoryPort
@@ -33,6 +35,8 @@ class UnitOfWorkPort(Protocol):
     fulfillment_queue: FulfillmentQueueRepositoryPort
     payment_watches: PaymentWatchRepositoryPort
     cash_settlements: CashSettlementRepositoryPort
+    partner_allocations: PartnerAllocationRepositoryPort
+    profit_accruals: ProfitAccrualRepositoryPort
 
     async def __aenter__(self) -> Self: ...
 

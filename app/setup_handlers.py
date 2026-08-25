@@ -31,6 +31,7 @@ from handlers import (
     get_table_delete_router,
     get_table_done_router,
 )
+from services.accounting import MidnightProfitCapitalizationJob, ProfitValuationService
 from services.admin_client import (
     ClientBootstrapService,
     ClientDirectoryService,
@@ -66,11 +67,15 @@ from services.payment_watch import (
     TronscanGateway,
     TronscanSettings,
 )
+from services.profit_capitalization_scheduler import (
+    setup_profit_capitalization_scheduler,
+)
 from services.rate_order import (
     OrderbookService,
     RapiraWsService,
     RateOrderService,
 )
+from services.rate_order.market_quote_provider import RapiraMarketQuoteProvider
 from services.request_table.delete_interaction_service import RequestTableDeleteInteractionService
 from services.request_table.done_interaction_service import RequestTableDoneInteractionService
 from services.request_table.message_builder import RequestTableMessageBuilder
@@ -196,6 +201,17 @@ def setup_handlers(
     nonzero_handler = NonZeroHandler(NonZeroWalletQueryService(client_wallet_tx_repo))
 
     services.market_ws_service = RapiraWsService()
+    services.profit_capitalization_scheduler = SchedulerLifecycleAdapter(
+        setup_profit_capitalization_scheduler(
+            job=MidnightProfitCapitalizationJob(
+                container.exchange.unit_of_work_factory,
+                valuation_service=ProfitValuationService(
+                    RapiraMarketQuoteProvider(services.market_ws_service)
+                ),
+                position_service=container.accounting.firm_positions,
+            )
+        )
+    )
 
     services.orderbook_service = OrderbookService(
         ws_service=services.market_ws_service,

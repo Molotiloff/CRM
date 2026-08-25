@@ -23,9 +23,81 @@ from .models import (
     CashChatRegistrySyncResult,
     FirmWalletAddress,
     MainDashboardSnapshot,
+    MarketQuote,
+    PartnerAllocation,
+    PartnerPurchaseContext,
+    ProfitAccrual,
     WalletFactSnapshot,
     WalletFactSource,
 )
+
+
+class MarketQuoteProviderPort(Protocol):
+    async def best_bid(self, symbol: str) -> MarketQuote | None: ...
+
+
+class PartnerAllocationRepositoryPort(Protocol):
+    async def acquire_purchase_lock(self, purchase_deal_id: int) -> None: ...
+
+    async def purchase_context(self, purchase_deal_id: int) -> PartnerPurchaseContext | None: ...
+
+    async def sale_quantity(self, sale_deal_id: int) -> Decimal | None: ...
+
+    async def allocated_quantity(self, purchase_deal_id: int) -> Decimal: ...
+
+    async def get_by_idempotency_key(self, key: str) -> PartnerAllocation | None: ...
+
+    async def get_for_update(self, allocation_id: int) -> PartnerAllocation | None: ...
+
+    async def has_non_reversed_sale_allocation(self, sale_deal_id: int) -> bool: ...
+
+    async def create_firm_wallet_allocation(
+        self, *, purchase_deal_id: int, qty: Decimal, idempotency_key: str,
+        actor_user_id: int | None,
+    ) -> PartnerAllocation: ...
+
+    async def create_client_allocation(
+        self, *, purchase_deal_id: int, sale_deal_id: int, qty: Decimal,
+        network: str, partner_address: str, destination_address: str,
+        idempotency_key: str, actor_user_id: int | None,
+    ) -> PartnerAllocation: ...
+
+    async def settle_firm_wallet(
+        self, *, allocation_id: int, position_move_id: int,
+    ) -> PartnerAllocation: ...
+
+    async def settle_client_transfer(
+        self, *, allocation_id: int, actual_qty: Decimal, tx_hash: str,
+        event_index: int, confirmed_at: datetime,
+    ) -> PartnerAllocation: ...
+
+    async def record_partner_rub_balance(
+        self, *, account_id: int, deal_id: int, amount: Decimal,
+        actor_user_id: int | None, idempotency_key: str,
+    ) -> int: ...
+
+
+class ProfitAccrualRepositoryPort(Protocol):
+    async def acquire_capitalization_lock(self, business_date: date) -> None: ...
+
+    async def get_by_idempotency_key(self, key: str) -> ProfitAccrual | None: ...
+
+    async def append(
+        self, *, deal_id: int, qty: Decimal, settlement_status: str,
+        idempotency_key: str,
+    ) -> ProfitAccrual: ...
+
+    async def list_pending_before(self, boundary: datetime) -> list[ProfitAccrual]: ...
+
+    async def mark_capitalized(
+        self, *, accrual_ids: tuple[int, ...], quote: MarketQuote,
+        move_id: int, capitalized_at: datetime, actor_user_id: int | None,
+        reason: str | None,
+    ) -> None: ...
+
+    async def mark_received(
+        self, *, accrual_id: int, payment_event_id: int, received_at: datetime
+    ) -> ProfitAccrual: ...
 
 
 class CashChatRegistryRepositoryPort(Protocol):
