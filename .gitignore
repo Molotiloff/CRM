@@ -20,6 +20,7 @@ env/
 .env
 .env.*
 !.env.example
+message_archive_data/
 secrets/
 exchange-bot-*.json
 *credentials*.json
@@ -27,10 +28,23 @@ exchange-bot-*.json
 google-service-account*.json
 
 # Local data and internal project documents
-/scripts/
+/scripts/*
+!/scripts/import_accounting_snapshot.py
+!/scripts/import_telegram_history.py
+!/scripts/benchmark_message_archive_export.py
 /dumps/
+/*.xlsx
+/*.xls
+/*.xlsm
+/*.ods
+/*.csv
+/*.tsv
+/~$*
 /Crm SkyEx (2).pdf
+/BACKEND_ARCHITECTURE.md
 /COMMANDS.md
+/database_schema_audit.md
+/docs/
 /refactoring.md
 /CRM.pdf
 /requirements-dev.txt

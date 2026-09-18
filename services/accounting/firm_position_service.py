@@ -57,7 +57,12 @@ class FirmPositionAccountingService:
         async with self._unit_of_work_factory() as unit_of_work:
             return await unit_of_work.firm_positions.list_current()
 
-    async def record_opening(self, command: RecordOpening) -> FirmPositionMove:
+    async def record_opening(
+        self,
+        command: RecordOpening,
+        *,
+        unit_of_work: UnitOfWorkPort | None = None,
+    ) -> FirmPositionMove:
         qty = accounting_decimal(command.qty, field="opening quantity")
         cost = accounting_decimal(command.rub_cost, field="opening rub cost")
         if qty < 0 or cost < 0:
@@ -68,6 +73,7 @@ class FirmPositionAccountingService:
             calculate=lambda current: self._opening(current, qty=qty, rub_cost=cost),
             expected_qty=qty,
             reason=command.reason,
+            unit_of_work=unit_of_work,
         )
 
     async def record_purchase(
@@ -125,7 +131,12 @@ class FirmPositionAccountingService:
             unit_of_work=unit_of_work,
         )
 
-    async def record_adjustment(self, command: RecordAdjustment) -> FirmPositionMove:
+    async def record_adjustment(
+        self,
+        command: RecordAdjustment,
+        *,
+        unit_of_work: UnitOfWorkPort | None = None,
+    ) -> FirmPositionMove:
         qty = accounting_decimal(command.qty_delta, field="adjustment quantity")
         cost = accounting_decimal(command.rub_cost_delta, field="adjustment rub cost")
         if not str(command.reason).strip():
@@ -136,6 +147,7 @@ class FirmPositionAccountingService:
             calculate=lambda _current: (qty, cost),
             expected_qty=qty,
             reason=command.reason,
+            unit_of_work=unit_of_work,
         )
 
     async def reverse(self, command: ReversePositionMove) -> FirmPositionMove:

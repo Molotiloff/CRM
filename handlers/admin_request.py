@@ -121,7 +121,11 @@ class AdminRequestHandler:
         recv_prec: int | None = None
         pay_prec: int | None = None
         try:
-            client_id = await self.repo.ensure_client(chat_id=self.admin_chat_id, name="admin")
+            client_id = await self.repo.ensure_client(
+                chat_id=self.admin_chat_id,
+                name=getattr(message.chat, "title", None) or "admin",
+                client_group="internal_wallet",
+            )
             accs = await self.repo.snapshot_wallet(client_id)
             for r in accs:
                 c = str(r["currency_code"]).upper()

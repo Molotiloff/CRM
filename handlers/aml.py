@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from typing import cast
 
-from aiogram import Router
+from aiogram import Bot, Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.types import Message
 
 from db_asyncpg.ports.administration import ManagerRepositoryPort
 from domain.tron_wallet import is_probable_tron_wallet, normalize_wallet
-from services.aml import AMLQueueService, AMLQueueTask
+from services.aml import AMLQueueFullError, AMLQueueService, AMLQueueTask
 from telegram_adapters.auth import manager_or_admin_message_required
 
 _RE_AML = re.compile(r"^/амл(?:@\w+)?\s+(\S+)\s*$", re.IGNORECASE)
@@ -49,26 +50,41 @@ class AMLHandler:
             return
 
         wait_msg = await message.answer("⏳ AML-проверка добавлена в очередь...")
+        bot = cast(Bot, message.bot)
+        chat_id = message.chat.id
+        wait_message_id = wait_msg.message_id
 
         async def on_success(result: dict) -> None:
             try:
-                await wait_msg.edit_text(result["message_text"])
+                await bot.edit_message_text(
+                    result["message_text"],
+                    chat_id=chat_id,
+                    message_id=wait_message_id,
+                )
             except TelegramAPIError:
-                await message.answer(result["message_text"])
+                await bot.send_message(chat_id, result["message_text"])
 
         async def on_error(exc: Exception) -> None:
-            await wait_msg.edit_text(
+            await bot.edit_message_text(
                 f"❌ AML-проверка завершилась ошибкой:\n<code>{exc}</code>",
+                chat_id=chat_id,
+                message_id=wait_message_id,
                 parse_mode="HTML",
             )
 
-        position = await self.aml_queue_service.enqueue(
-            AMLQueueTask(
-                wallet=wallet,
-                on_success=on_success,
-                on_error=on_error,
+        try:
+            position = await self.aml_queue_service.enqueue(
+                AMLQueueTask(
+                    wallet=wallet,
+                    on_success=on_success,
+                    on_error=on_error,
+                )
             )
-        )
+        except AMLQueueFullError:
+            await wait_msg.edit_text(
+                "❌ Очередь AML-проверок заполнена. Попробуйте повторить команду позже."
+            )
+            return
 
         if position == 1:
             await wait_msg.edit_text("⏳ AML-проверка поставлена в обработку...")

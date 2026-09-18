@@ -57,3 +57,25 @@ def test_non_currency_command_returns_none(raw_text: str) -> None:
 def test_invalid_amount_is_rejected(raw_text: str, error: str) -> None:
     with pytest.raises(ValueError, match=error):
         WalletCommandParser().parse_currency_change(raw_text, chat_id=100)
+
+
+@pytest.mark.parametrize("command", ["/отпр 50000", "/отпр1 160000"])
+def test_parse_partner_usdt_send_amount(command: str) -> None:
+    parsed = WalletCommandParser.parse_partner_usdt_send(command)
+
+    assert parsed is not None
+    assert parsed.amount == Decimal(command.split()[1])
+    assert parsed.raw_text == command
+
+
+def test_parse_partner_usdt_send_all() -> None:
+    parsed = WalletCommandParser.parse_partner_usdt_send("/баотпр")
+
+    assert parsed is not None
+    assert parsed.amount is None
+
+
+@pytest.mark.parametrize("command", ["/отпр 0", "/отпр -100"])
+def test_partner_usdt_send_requires_positive_amount(command: str) -> None:
+    with pytest.raises(ValueError, match="положительной"):
+        WalletCommandParser.parse_partner_usdt_send(command)

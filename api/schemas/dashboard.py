@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel
 
@@ -65,11 +65,43 @@ class DashboardSystemMetricDto(BaseModel):
     tone: str
 
 
+class DashboardShadowComparisonDto(BaseModel):
+    status: str
+    comparedFields: int
+    mismatchCount: int
+    reportId: int | None = None
+
+
+class DashboardShadowDifferenceDto(BaseModel):
+    path: str
+    sheet: str | None
+    database: str | None
+    absoluteDelta: str | None
+    relativeDelta: str | None
+    classification: str
+
+
+class DashboardShadowReportDto(BaseModel):
+    id: int
+    businessDate: date
+    primarySource: str
+    status: str
+    comparedFields: int
+    mismatchCount: int
+    absoluteTolerance: str
+    relativeTolerance: str
+    sheetsDataAsOf: datetime
+    dbDataAsOf: datetime
+    createdAt: datetime
+    differences: list[DashboardShadowDifferenceDto]
+
+
 class DashboardResponse(BaseModel):
     source: str
     calculatedAt: datetime
     dataAsOf: datetime
     warnings: list[str]
+    shadowComparison: DashboardShadowComparisonDto | None = None
     dateLabel: str
     weekdayLabel: str
     cities: list[str]

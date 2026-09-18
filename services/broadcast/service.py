@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from db_asyncpg.ports.clients import ClientRepositoryPort
@@ -12,8 +13,14 @@ from services.broadcast.models import (
 
 
 class BroadcastService:
-    def __init__(self, *, repo: ClientRepositoryPort) -> None:
+    def __init__(
+        self,
+        *,
+        repo: ClientRepositoryPort,
+        excluded_chat_ids: Iterable[int] | None = None,
+    ) -> None:
         self.repo = repo
+        self.excluded_chat_ids = {int(chat_id) for chat_id in excluded_chat_ids or []}
 
     @staticmethod
     def extract_group_from_command(text: str) -> str | None:
@@ -32,6 +39,11 @@ class BroadcastService:
 
     async def get_target_clients(self, *, group: str | None = None) -> list[dict[str, Any]]:
         clients = await self.repo.list_clients()
+        clients = [
+            client
+            for client in clients
+            if _chat_id_or_none(client.get("chat_id")) not in self.excluded_chat_ids
+        ]
         if not group:
             return clients
 
@@ -79,3 +91,10 @@ class BroadcastService:
             "📣 <b>Рассылка завершена</b>\n\n"
             f"✅ Отправлено: <b>{result.sent}</b>\n"
         )
+
+
+def _chat_id_or_none(value: object) -> int | None:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None

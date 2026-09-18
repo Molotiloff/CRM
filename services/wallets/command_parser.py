@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from decimal import Decimal
 
 from services.expression_calculator import CalcError, evaluate
-from services.wallets.models import ParsedCurrencyChange
+from services.wallets.models import ParsedCurrencyChange, PartnerUsdtSendCommand
+
+_PARTNER_USDT_AMOUNT_RE = re.compile(
+    r"(?iu)^/(?:отпр|отпр1)(?:@\w+)?\s+(.+?)\s*$"
+)
+_PARTNER_USDT_ALL_RE = re.compile(r"(?iu)^/баотпр(?:@\w+)?\s*$")
 
 
 class WalletCommandParser:
+    _RESERVED_NON_CURRENCY_COMMANDS = frozenset({"сообщение"})
     _CURRENCY_ALIASES = {
         "usd": "USD",
         "дол": "USD",
@@ -84,6 +91,8 @@ class WalletCommandParser:
             return None
 
         raw_code = parts[0]
+        if raw_code.split("@", 1)[0].lower() in self._RESERVED_NON_CURRENCY_COMMANDS:
+            return None
         code = self.normalize_code_alias(raw_code)
 
         expr_full = parts[1].strip()
@@ -120,3 +129,21 @@ class WalletCommandParser:
             client_name_for_transfer=client_name_for_transfer,
             extra_comment=extra_comment,
         )
+
+    @staticmethod
+    def parse_partner_usdt_send(raw_text: str) -> PartnerUsdtSendCommand | None:
+        text = (raw_text or "").strip()
+        if _PARTNER_USDT_ALL_RE.fullmatch(text):
+            return PartnerUsdtSendCommand(amount=None, raw_text=text)
+
+        match = _PARTNER_USDT_AMOUNT_RE.fullmatch(text)
+        if match is None:
+            return None
+        raw_amount = match.group(1).strip().replace(",", ".")
+        try:
+            amount = Decimal(evaluate(raw_amount))
+        except CalcError as error:
+            raise ValueError(f"Ошибка в сумме отправки USDT: {error}") from error
+        if amount <= 0:
+            raise ValueError("Сумма отправки USDT должна быть положительной")
+        return PartnerUsdtSendCommand(amount=amount, raw_text=text)

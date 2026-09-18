@@ -81,7 +81,7 @@ class BotApp:
             logging.info(
                 "Bot is starting… (request_chat_id=%s, city_cash_chats=%s, "
                 "ignore_chat_ids=%s, city_cash_chat_map=%s, rate_orders_chat_id=%s, "
-                "aml_enabled=%s, rapira_enabled=%s)",
+                "aml_enabled=%s, rapira_enabled=%s, message_archive_enabled=%s)",
                 self.config.request_chat_id,
                 self.config.cash_chat_map,
                 self.ignore_chat_ids,
@@ -89,6 +89,7 @@ class BotApp:
                 self.config.rate_orders_chat_id,
                 bool(self.config.getblock),
                 self.services.market_ws_service is not None,
+                self.config.message_archive_enabled,
             )
             api_server = self._create_api_server()
             if api_server is not None:
@@ -102,7 +103,20 @@ class BotApp:
                     self.config.api_host,
                     self.config.api_port,
                 )
-            await self.dp.start_polling(self.bot)
+            allowed_updates = self.dp.resolve_used_update_types()
+            if self.config.message_archive_enabled:
+                allowed_updates = sorted(
+                    set(allowed_updates)
+                    | {
+                        "message",
+                        "edited_message",
+                        "channel_post",
+                        "edited_channel_post",
+                        "business_message",
+                        "edited_business_message",
+                    }
+                )
+            await self.dp.start_polling(self.bot, allowed_updates=allowed_updates)
         finally:
             try:
                 if api_lifecycle is not None:

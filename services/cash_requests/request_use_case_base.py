@@ -62,8 +62,13 @@ class CashRequestUseCaseBase:
         chat_id: int,
         chat_name: str,
         city: str,
+        client_group: str | None = None,
     ) -> RequestContext:
-        client_id = await self.repo.ensure_client(chat_id=chat_id, name=chat_name)
+        client_id = await self.repo.ensure_client(
+            chat_id=chat_id,
+            name=chat_name,
+            client_group=client_group,
+        )
         return RequestContext(
             city=(city or self.router_service.default_city).strip().lower(),
             request_chat_id=self.router_service.pick_request_chat_for_city(city),

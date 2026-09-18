@@ -176,14 +176,16 @@ class CashSettlementService:
                 source="cash_settlement",
                 idempotency_key=f"cash_settlement:{request_id}:cash",
             )
-            client_transaction_id = await operation(
-                client_id=context.client_id,
-                currency_code=currency,
-                amount=actual_qty,
-                comment=f"cash settlement {request_id}",
-                source="cash_settlement",
-                idempotency_key=f"cash_settlement:{request_id}:client",
-            )
+            client_transaction_id = None
+            if context.track_client_balance:
+                client_transaction_id = await operation(
+                    client_id=context.client_id,
+                    currency_code=currency,
+                    amount=actual_qty,
+                    comment=f"cash settlement {request_id}",
+                    source="cash_settlement",
+                    idempotency_key=f"cash_settlement:{request_id}:client",
+                )
 
             position_move_id = None
             position_currency = self._POSITION_CURRENCY.get(currency)

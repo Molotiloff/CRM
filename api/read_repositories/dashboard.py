@@ -53,12 +53,28 @@ class DashboardReadRepository(ConnectionBoundRepo):
                            END AS currency_code,
                            COALESCE(SUM(account.balance), 0) AS balance
                     FROM client_accounts account
+                    JOIN clients client ON client.id = account.client_id
                     WHERE account.is_active
+                      AND COALESCE(client.client_group, '') <> 'internal_wallet'
                       AND NOT EXISTS (
                           SELECT 1 FROM cash_chat_registry cash
-                          WHERE cash.client_id = account.client_id AND cash.is_active
+                          WHERE cash.client_id = account.client_id
+                            AND cash.is_active
+                            AND (
+                                cash.cash_currency_codes IS NULL
+                                OR UPPER(BTRIM(account.currency_code))
+                                   = ANY(cash.cash_currency_codes)
+                            )
                       )
                     GROUP BY 1
+                    """
+                )
+                internal_currency_balances = await connection.fetch(
+                    """
+                    SELECT currency_code, COALESCE(SUM(balance), 0) AS balance
+                    FROM internal_accounts
+                    WHERE is_active AND currency_code <> 'RUB'
+                    GROUP BY currency_code
                     """
                 )
                 cash_balances = await connection.fetch(
@@ -73,6 +89,11 @@ class DashboardReadRepository(ConnectionBoundRepo):
                     FROM cash_chat_registry cash
                     JOIN client_accounts account ON account.client_id = cash.client_id
                     WHERE cash.is_active AND account.is_active
+                      AND (
+                          cash.cash_currency_codes IS NULL
+                          OR UPPER(BTRIM(account.currency_code))
+                             = ANY(cash.cash_currency_codes)
+                      )
                     GROUP BY 1
                     """
                 )
@@ -88,7 +109,22 @@ class DashboardReadRepository(ConnectionBoundRepo):
                     """
                     SELECT
                         (SELECT COALESCE(SUM(balance), 0) FROM internal_accounts
-                          WHERE is_active) AS skyex_balances,
+                          WHERE is_active AND currency_code = 'RUB') AS skyex_balances,
+                        (SELECT COALESCE(SUM(balance), 0) FROM cash_desks
+                          WHERE is_active AND currency_code = 'RUB'
+                            AND city = 'мск' AND name IN ('Поэты', 'BS')
+                            AND NOT EXISTS (
+                                SELECT 1 FROM cash_chat_registry cash
+                                WHERE cash.is_active
+                                  AND LOWER(BTRIM(cash.city)) = 'мск'
+                                  AND LOWER(BTRIM(cash.location_name))
+                                      = LOWER(BTRIM(cash_desks.name))
+                                  AND (
+                                      cash.cash_currency_codes IS NULL
+                                      OR 'RUB' = ANY(cash.cash_currency_codes)
+                                  )
+                            ))
+                            AS manual_rub_cash,
                         (SELECT COALESCE(SUM(amount), 0) FROM capital_moves)
                             AS invested_capital,
                         (SELECT COALESCE(SUM(profit), 0) FROM deals
@@ -104,7 +140,7 @@ class DashboardReadRepository(ConnectionBoundRepo):
                           WHERE status = 'done' AND deal_type = 'sale' AND deal_at = $1)
                             AS daily_turnover,
                         (SELECT COALESCE(SUM(
-                            COALESCE(NULLIF(body->>'sale_amount', '')::numeric, 0)
+                            COALESCE(NULLIF(body->>'rub_cost', '')::numeric, 0)
                          ), 0) FROM deals
                           WHERE status = 'done' AND deal_type = 'sale'
                             AND deal_at >= date_trunc('month', $1::date)::date
@@ -112,10 +148,18 @@ class DashboardReadRepository(ConnectionBoundRepo):
                                 + INTERVAL '1 month')::date) AS monthly_turnover,
                         (SELECT COUNT(DISTINCT account.client_id)
                            FROM client_accounts account
+                           JOIN clients client ON client.id = account.client_id
                           WHERE account.is_active AND account.balance <> 0
+                            AND COALESCE(client.client_group, '') <> 'internal_wallet'
                             AND NOT EXISTS (
                                 SELECT 1 FROM cash_chat_registry cash
-                                WHERE cash.client_id = account.client_id AND cash.is_active
+                                WHERE cash.client_id = account.client_id
+                                  AND cash.is_active
+                                  AND (
+                                      cash.cash_currency_codes IS NULL
+                                      OR UPPER(BTRIM(account.currency_code))
+                                         = ANY(cash.cash_currency_codes)
+                                  )
                             )) AS clients_with_balance,
                         (SELECT COUNT(*) FROM exchange_request_links
                           WHERE status = 'active') AS active_exchange_requests,
@@ -134,41 +178,50 @@ class DashboardReadRepository(ConnectionBoundRepo):
                 )
                 city_rows = await connection.fetch(
                     """
-                    WITH income AS (
-                        SELECT LOWER(BTRIM(city)) AS city, COALESCE(SUM(profit), 0) AS income
+                    WITH components AS (
+                        SELECT LOWER(BTRIM(city)) AS city, profit AS income,
+                               0::numeric AS expense, 0::bigint AS active_requests
                         FROM deals
                         WHERE status = 'done'
-                        GROUP BY 1
-                    ), spent AS (
-                        SELECT LOWER(BTRIM(city)) AS city, COALESCE(SUM(amount), 0) AS expense
+                        UNION ALL
+                        SELECT LOWER(BTRIM(city)), 0, amount, 0
                         FROM expenses
                         WHERE city IS NOT NULL
-                        GROUP BY 1
-                    ), active AS (
-                        SELECT LOWER(BTRIM(city)) AS city, COUNT(*) AS active_requests
+                        UNION ALL
+                        SELECT LOWER(BTRIM(city)), 0, 0, 1
                         FROM request_schedule_entries
                         WHERE is_active
-                        GROUP BY 1
+                    ), normalized AS (
+                        SELECT CASE city
+                                   WHEN 'тюмень' THEN 'тюм'
+                                   WHEN 'москва' THEN 'мск'
+                                   WHEN 'новосибирск' THEN 'нск'
+                                   WHEN 'санкт-петербург' THEN 'спб'
+                                   ELSE city
+                               END AS city,
+                               income, expense, active_requests
+                        FROM components
                     )
-                    SELECT COALESCE(i.city, s.city, a.city) AS city,
-                           COALESCE(i.income, 0) AS income,
-                           COALESCE(s.expense, 0) AS expense,
-                           COALESCE(a.active_requests, 0) AS active_requests
-                    FROM income i
-                    FULL JOIN spent s USING (city)
-                    FULL JOIN active a USING (city)
+                    SELECT city, COALESCE(SUM(income), 0) AS income,
+                           COALESCE(SUM(expense), 0) AS expense,
+                           COALESCE(SUM(active_requests), 0) AS active_requests
+                    FROM normalized
+                    GROUP BY city
                     ORDER BY 1
                     """
                 )
 
         position_by_code = {str(row["currency_code"]): row for row in positions}
         client_by_code = {
-            str(row["currency_code"]): _decimal(row["balance"])
-            for row in client_balances
+            str(row["currency_code"]): _decimal(row["balance"]) for row in client_balances
         }
+        for row in internal_currency_balances:
+            code = str(row["currency_code"])
+            client_by_code[code] = client_by_code.get(code, Decimal(0)) + _decimal(
+                row["balance"]
+            )
         cash_by_code = {
-            str(row["currency_code"]): _decimal(row["balance"])
-            for row in cash_balances
+            str(row["currency_code"]): _decimal(row["balance"]) for row in cash_balances
         }
         fact_by_code = {str(row["currency_code"]): row for row in wallet_facts}
         deal_profit_qty = _decimal(totals["deal_profit_qty"])
@@ -183,9 +236,7 @@ class DashboardReadRepository(ConnectionBoundRepo):
             fact_qty = free_qty + client_qty + profit_qty
             observed = fact_by_code.get(code)
             observed_qty = (
-                _decimal(observed["actual_qty"])
-                if observed is not None
-                else cash_by_code.get(code)
+                _decimal(observed["actual_qty"]) if observed is not None else cash_by_code.get(code)
             )
             currencies.append(
                 MainDashboardCurrency(
@@ -202,7 +253,7 @@ class DashboardReadRepository(ConnectionBoundRepo):
                 )
             )
 
-        rub_cash = cash_by_code.get("RUB", Decimal(0))
+        rub_cash = cash_by_code.get("RUB", Decimal(0)) + _decimal(totals["manual_rub_cash"])
         rub_in_currency = sum((item.rub_cost for item in currencies), Decimal(0))
         client_rub = client_by_code.get("RUB", Decimal(0))
         skyex_balances = _decimal(totals["skyex_balances"])
@@ -226,14 +277,10 @@ class DashboardReadRepository(ConnectionBoundRepo):
         )
         usdt_fact = next(item.fact_qty for item in currencies if item.code == "USDT")
         queued_usdt = _decimal(totals["queued_usdt_qty"])
-        usdt_observed = next(
-            item.observed_qty for item in currencies if item.code == "USDT"
-        )
+        usdt_observed = next(item.observed_qty for item in currencies if item.code == "USDT")
         warnings = []
         if any(code != "RUB" and amount != 0 for code, amount in client_by_code.items()):
-            warnings.append(
-                "Client FX balances are excluded from RUB valuation (stored_rub_only)"
-            )
+            warnings.append("Client FX balances are excluded from RUB valuation (stored_rub_only)")
         if usdt_observed is None:
             warnings.append("USDT physical balance has not been observed")
         else:

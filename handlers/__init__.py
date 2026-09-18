@@ -3,6 +3,7 @@ from .act import ActHandler
 from .admin_request import AdminRequestHandler
 from .aml import AMLHandler
 from .balances_clients import ClientsBalancesHandler
+from .best_change import BestChangeHandler
 from .broadcast_all import BroadcastAllHandler
 from .calc import CalcHandler
 from .cash_requests import CashRequestsHandler
@@ -27,6 +28,7 @@ __all__ = [
     "AcceptShortHandler",
     "ActHandler",
     "AdminRequestHandler",
+    "BestChangeHandler",
     "BroadcastAllHandler",
     "CalcHandler",
     "CashRequestsHandler",

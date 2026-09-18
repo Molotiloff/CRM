@@ -1,0 +1,126 @@
+{
+  "sourceName": "sheets-cutover-2026-08-26",
+  "cutoverAt": "2026-08-26T00:00:00+05:00",
+  "positionStrategy": {
+    "USDT": "opening"
+  },
+  "records": [
+    {
+      "key": "cash-ekb-main",
+      "kind": "cash_registry",
+      "payload": {
+        "chatId": -100000000001,
+        "city": "екб",
+        "locationName": "Основная касса"
+      }
+    },
+    {
+      "key": "cash-ekb-main-rub",
+      "kind": "cash_balance",
+      "payload": {
+        "chatId": -100000000001,
+        "currency": "RUB",
+        "amount": "100000.00"
+      }
+    },
+    {
+      "key": "client-10001-usdt",
+      "kind": "client_balance",
+      "payload": {
+        "chatId": 10001,
+        "currency": "USDT",
+        "amount": "250.00000000"
+      }
+    },
+    {
+      "key": "internal-tech-opening",
+      "kind": "internal_balance",
+      "payload": {
+        "name": "Технический счет",
+        "accountKind": "tech",
+        "amount": "-5000.00"
+      }
+    },
+    {
+      "key": "capital-owner-opening",
+      "kind": "capital",
+      "payload": {
+        "owner": "Собственник",
+        "amount": "500000.00",
+        "date": "2026-08-26",
+        "monthlyRate": "0.02"
+      }
+    },
+    {
+      "key": "expense-rent-2026-08",
+      "kind": "expense",
+      "payload": {
+        "expenseKind": "fixed",
+        "category": "Аренда",
+        "city": "екб",
+        "amount": "50000.00",
+        "date": "2026-08-26",
+        "comment": "Opening import"
+      }
+    },
+    {
+      "key": "position-usdt-opening",
+      "kind": "position_opening",
+      "payload": {
+        "currency": "USDT",
+        "qty": "1000.00000000",
+        "rubCost": "80000.00",
+        "reason": "Утвержденный opening на cutover"
+      }
+    },
+    {
+      "key": "wallet-usdt-cutover",
+      "kind": "wallet_fact",
+      "payload": {
+        "currency": "USDT",
+        "qty": "1200.00000000",
+        "observedAt": "2026-08-26T00:00:00+05:00"
+      }
+    },
+    {
+      "key": "sale-row-2",
+      "kind": "deal",
+      "payload": {
+        "dealType": "sale",
+        "city": "екб",
+        "date": "2026-08-25",
+        "profit": "1000.00",
+        "body": {
+          "currency": "USDT",
+          "qty": "100.00000000",
+          "rub_cost": "8000.00",
+          "sale_amount": "9000.00",
+          "source_sheet": "Продажа",
+          "source_row": 2
+        }
+      }
+    },
+    {
+      "key": "profit-accrual-row-2",
+      "kind": "profit_accrual",
+      "payload": {
+        "dealKey": "sale-row-2",
+        "qty": "10.00000000",
+        "settlementStatus": "in_transit"
+      }
+    }
+  ],
+  "expectedTotals": {
+    "cash_balance.RUB.amount": "100000.00",
+    "client_balance.USDT.amount": "250.00000000",
+    "internal_balance.RUB.amount": "-5000.00",
+    "capital.RUB.amount": "500000.00",
+    "expense.RUB.amount": "50000.00",
+    "deal.RUB.profit": "1000.00",
+    "deal.RUB.rub_cost": "8000.00",
+    "position_opening.USDT.qty": "1000.00000000",
+    "position_opening.USDT.rub": "80000.00",
+    "wallet_fact.USDT.qty": "1200.00000000",
+    "profit_accrual.USDT.qty": "10.00000000"
+  }
+}

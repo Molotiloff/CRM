@@ -4,11 +4,14 @@ from types import TracebackType
 
 import asyncpg
 
+from db_asyncpg.repositories.accounting_imports import AccountingImportsRepo
+from db_asyncpg.repositories.best_change import BestChangeRepo
 from db_asyncpg.repositories.cash_settlements import CashSettlementRepo
 from db_asyncpg.repositories.deals import DealRepository
 from db_asyncpg.repositories.exchange_requests import ExchangeRequestsRepo
 from db_asyncpg.repositories.firm_positions import FirmPositionsRepo
 from db_asyncpg.repositories.fulfillment_queue import FulfillmentQueueRepo
+from db_asyncpg.repositories.manual_cash import ManualCashRepo
 from db_asyncpg.repositories.partner_allocations import PartnerAllocationsRepo
 from db_asyncpg.repositories.payment_watch import PaymentWatchRepo
 from db_asyncpg.repositories.profit_accruals import ProfitAccrualsRepo
@@ -38,6 +41,9 @@ class AsyncpgUnitOfWork:
         self.cash_settlements: CashSettlementRepo
         self.partner_allocations: PartnerAllocationsRepo
         self.profit_accruals: ProfitAccrualsRepo
+        self.accounting_imports: AccountingImportsRepo
+        self.best_change: BestChangeRepo
+        self.manual_cash: ManualCashRepo
 
     async def __aenter__(self) -> AsyncpgUnitOfWork:
         self._connection = await self._pool.acquire()
@@ -91,6 +97,15 @@ class AsyncpgUnitOfWork:
             self._pool,
             connection=self._connection,
         )
+        self.accounting_imports = AccountingImportsRepo(
+            self._pool,
+            connection=self._connection,
+        )
+        self.best_change = BestChangeRepo(
+            self._pool,
+            connection=self._connection,
+        )
+        self.manual_cash = ManualCashRepo(self._pool, connection=self._connection)
         return self
 
     async def commit(self) -> None:

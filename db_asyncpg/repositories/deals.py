@@ -295,11 +295,24 @@ SELECT d.*, c.name AS client_name, c.chat_id AS client_chat_id,
        cp.name AS counterparty_name,
        cp.default_fee_percent AS counterparty_percent,
        COALESCE(u.display_name, 'System') AS created_by_name,
-       pw.id AS payment_watch_id, pw.status AS payment_watch_status
+       pw.id AS payment_watch_id, pw.status AS payment_watch_status,
+       corrected_from.original_deal_id AS corrected_from_deal_id,
+       corrected_to.replacement_deal_id AS corrected_to_deal_id,
+       COALESCE(corrected_from.reason, corrected_to.reason) AS correction_reason,
+       correction_actor.display_name AS correction_actor_name
 FROM deals d
 LEFT JOIN clients c ON c.id = d.client_id
 LEFT JOIN counterparties cp ON cp.id = d.counterparty_id
 LEFT JOIN users u ON u.id = d.created_by
+LEFT JOIN best_change_deal_corrections corrected_from
+  ON corrected_from.replacement_deal_id = d.id
+LEFT JOIN best_change_deal_corrections corrected_to
+  ON corrected_to.original_deal_id = d.id
+LEFT JOIN users correction_actor
+  ON correction_actor.id = COALESCE(
+      corrected_from.actor_user_id,
+      corrected_to.actor_user_id
+  )
 LEFT JOIN LATERAL (
     SELECT id, status
     FROM payment_watches

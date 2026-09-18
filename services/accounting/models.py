@@ -2,10 +2,85 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 
-from domain import CurrencyCode
+from domain import CurrencyCode, DomainValidationError
+
+
+class ManualCashAccountCode(StrEnum):
+    POETS = "moscow_poets"
+    BS = "moscow_bs"
+
+
+class ManualCashOperation(StrEnum):
+    INFLOW = "inflow"
+    OUTFLOW = "outflow"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ManualCashAccount:
+    code: ManualCashAccountCode
+    name: str
+    balance: Decimal
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ManualCashMove:
+    id: int
+    account_code: ManualCashAccountCode
+    operation: str
+    amount: Decimal
+    balance_after: Decimal
+    effective_at: date
+    comment: str
+    actor_name: str
+    reversal_of_id: int | None
+    reversed: bool
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RecordManualCashMove:
+    account_code: ManualCashAccountCode | str
+    operation: ManualCashOperation | str
+    amount: Decimal
+    effective_at: date
+    comment: str
+    actor_user_id: int
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        try:
+            account = ManualCashAccountCode(self.account_code)
+            operation = ManualCashOperation(self.operation)
+        except ValueError as error:
+            raise DomainValidationError("Unknown manual cash account or operation") from error
+        amount = self.amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        comment = self.comment.strip()
+        if amount <= 0:
+            raise DomainValidationError("Manual cash amount must be positive")
+        if not comment:
+            raise DomainValidationError("Manual cash comment is required")
+        if self.actor_user_id <= 0 or not self.idempotency_key.strip():
+            raise DomainValidationError("Manual cash audit fields are required")
+        object.__setattr__(self, "account_code", account)
+        object.__setattr__(self, "operation", operation)
+        object.__setattr__(self, "amount", amount)
+        object.__setattr__(self, "comment", comment)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ReverseManualCashMove:
+    move_id: int
+    comment: str
+    actor_user_id: int
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        if self.move_id <= 0 or self.actor_user_id <= 0:
+            raise DomainValidationError("Manual cash reversal audit fields are invalid")
+        if not self.comment.strip() or not self.idempotency_key.strip():
+            raise DomainValidationError("Manual cash reversal reason is required")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -13,6 +88,21 @@ class CashChatBinding:
     city: str
     chat_id: int
     location_name: str
+    cash_currency_codes: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        city = self.city.strip().lower()
+        location_name = self.location_name.strip()
+        if not city or not location_name or self.chat_id == 0:
+            raise DomainValidationError("Cash chat binding fields are required")
+        object.__setattr__(self, "city", city)
+        object.__setattr__(self, "location_name", location_name)
+        if self.cash_currency_codes is None:
+            return
+        codes = tuple(dict.fromkeys(code.strip().upper() for code in self.cash_currency_codes))
+        if not codes or any(not code for code in codes):
+            raise DomainValidationError("Cash chat currency scope must not be empty")
+        object.__setattr__(self, "cash_currency_codes", codes)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

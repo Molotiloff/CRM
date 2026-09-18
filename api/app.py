@@ -11,7 +11,7 @@ from config import Config
 
 from . import ws
 from .exception_handlers import register_exception_handlers
-from .routers import auth, balances, clients, dashboard, deals, fulfillments, health
+from .routers import auth, balances, clients, dashboard, deals, fulfillments, health, manual_cash
 
 
 def create_api_app(
@@ -39,6 +39,7 @@ def create_api_app(
     app.state.deal_service = crm_services.deals
     app.state.deal_source_mutation_service = crm_services.source_mutation
     app.state.deal_settlement_service = container.accounting.deal_settlements
+    app.state.manual_cash_service = container.accounting.manual_cash
     app.state.fulfillment_queue_service = container.accounting.fulfillment_queue
     app.state.metrics = container.metrics
     register_exception_handlers(app)
@@ -57,6 +58,7 @@ def create_api_app(
     app.include_router(clients.router)
     app.include_router(balances.router)
     app.include_router(dashboard.router)
+    app.include_router(manual_cash.router)
     app.include_router(deals.router)
     app.include_router(fulfillments.router)
     app.include_router(ws.router)

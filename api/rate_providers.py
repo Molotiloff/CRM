@@ -48,6 +48,10 @@ class DashboardSheetSnapshot:
     skyex_balances: Decimal
     currencies: dict[str, DashboardCurrencySnapshot]
     cities: dict[str, DashboardCityFinancialSnapshot]
+    daily_profit: Decimal | None = None
+    monthly_turnover: Decimal = Decimal(0)
+    profitability: Decimal | None = None
+    invested_capital: Decimal | None = None
 
     @property
     def rates(self) -> dict[str, Decimal]:
@@ -125,6 +129,10 @@ class GutilsFirmRateProvider:
                 skyex_balances=_cell_decimal(main, 8, 11),
                 rub_cash=_cell_decimal(main, 10, 11),
                 rub_in_currency=_cell_decimal(main, 11, 11),
+                daily_profit=_cell_decimal(main, 13, 2),
+                monthly_turnover=_cell_decimal(main, 13, 5),
+                profitability=_cell_percentage(main, 14, 5),
+                invested_capital=_cell_decimal(main, 13, 11),
                 currencies={
                     "EUR": _currency_snapshot(main, start_row=1, column=5),
                     "USDT": _currency_snapshot(main, start_row=7, column=5),
@@ -200,6 +208,15 @@ def _cell_decimal(rows: list[list[str]], row: int, column: int) -> Decimal:
         return _parse_decimal(rows[row - 1][column - 1])
     except IndexError as exc:
         raise ValueError(f"Required dashboard cell R{row}C{column} is empty") from exc
+
+
+def _cell_percentage(rows: list[list[str]], row: int, column: int) -> Decimal:
+    try:
+        raw = str(rows[row - 1][column - 1])
+    except IndexError as exc:
+        raise ValueError(f"Required dashboard cell R{row}C{column} is empty") from exc
+    value = _parse_decimal(raw)
+    return value / Decimal(100) if "%" in raw else value
 
 
 def _parse_decimal(value: str) -> Decimal:

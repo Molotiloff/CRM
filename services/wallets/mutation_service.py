@@ -229,6 +229,50 @@ class CurrencyMutationService:
             with_undo=False,
         )
 
+    async def withdraw_all(
+        self,
+        *,
+        chat_id: int,
+        chat_name: str,
+        code: str,
+        comment: str,
+        source: str,
+        idempotency_key: str,
+    ) -> WalletCommandResult:
+        client_id = await self.repo.ensure_client(chat_id, chat_name)
+        normalized_code = self.parser.normalize_code_alias(code)
+        accounts = await self.repo.snapshot_wallet(client_id)
+        account = next(
+            (
+                row
+                for row in accounts
+                if str(row["currency_code"]).upper() == normalized_code
+            ),
+            None,
+        )
+        if account is None:
+            return WalletCommandResult(
+                ok=False,
+                message_text=f"Счёт {normalized_code} не найден.",
+            )
+        balance = Decimal(str(account["balance"]))
+        if balance <= 0:
+            return WalletCommandResult(
+                ok=False,
+                message_text=f"На счёте {normalized_code} нет положительного остатка.",
+            )
+        return await self._apply_wallet_delta(
+            chat_id=chat_id,
+            chat_name=chat_name,
+            code=normalized_code,
+            amount=-balance,
+            expr=comment,
+            extra_comment="",
+            source=source,
+            idempotency_key=idempotency_key,
+            with_undo=False,
+        )
+
     async def remove_currency_confirmed(
         self,
         *,

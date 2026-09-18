@@ -40,6 +40,33 @@ async def test_cash_chat_sync_normalizes_cities_without_exposing_chat_ids() -> N
     )
 
 
+async def test_cash_chat_sync_limits_hybrid_moscow_wallets_to_rub() -> None:
+    repository = RecordingCashRegistry()
+    service = CashChatRegistrySyncService(
+        repository,
+        city_cash_chats={"екб": -100},
+        moscow_rub_cash_chats={"Поэты": -200, "BS": -300},
+    )
+
+    await service.sync()
+
+    assert repository.bindings == (
+        CashChatBinding(city="екб", chat_id=-100, location_name="Городская касса: екб"),
+        CashChatBinding(
+            city="мск",
+            chat_id=-300,
+            location_name="BS",
+            cash_currency_codes=("RUB",),
+        ),
+        CashChatBinding(
+            city="мск",
+            chat_id=-200,
+            location_name="Поэты",
+            cash_currency_codes=("RUB",),
+        ),
+    )
+
+
 def test_cash_chat_sync_rejects_request_chat_overlap() -> None:
     with pytest.raises(DomainValidationError, match="must differ.*екб"):
         CashChatRegistrySyncService(

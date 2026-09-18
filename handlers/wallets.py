@@ -44,6 +44,7 @@ class WalletsHandler:
         *,
         request_chat_id: int | None = None,
         ignore_chat_ids: Iterable[int] | None = None,
+        silent_chat_ids: Iterable[int] | None = None,
         city_cash_chats: Mapping[str, int] | None = None,
         cash_settlement_service: CashSettlementService | None = None,
     ) -> None:
@@ -52,6 +53,7 @@ class WalletsHandler:
         self.admin_user_ids = set(admin_user_ids or [])
         self.request_chat_id = int(request_chat_id) if request_chat_id is not None else None
         self.ignore_chat_ids = set(ignore_chat_ids or [])
+        self.silent_chat_ids = set(silent_chat_ids or [])
         self.city_cash_chats = dict(city_cash_chats or {})
         self.city_cash_chat_ids = set(self.city_cash_chats.values())
         self.cash_settlement_service = cash_settlement_service
@@ -139,11 +141,14 @@ class WalletsHandler:
         ):
             return
 
-        if not await require_manager_or_admin_message(
-            self.repo,
-            message,
-            admin_chat_ids=self.admin_chat_ids,
-            admin_user_ids=self.admin_user_ids,
+        if (
+            message.chat.id not in self.silent_chat_ids
+            and not await require_manager_or_admin_message(
+                self.repo,
+                message,
+                admin_chat_ids=self.admin_chat_ids,
+                admin_user_ids=self.admin_user_ids,
+            )
         ):
             return
 
@@ -152,13 +157,43 @@ class WalletsHandler:
 
     async def _execute_currency_change(self, message: Message) -> None:
         raw_text = message.text or message.caption or ""
+        if message.chat.id in self.silent_chat_ids:
+            try:
+                partner_send = (
+                    self.interaction_service.wallet_service.parser.parse_partner_usdt_send(
+                        raw_text
+                    )
+                )
+            except ValueError:
+                return
+            if partner_send is not None:
+                wallet_service = self.interaction_service.wallet_service
+                common = {
+                    "chat_id": message.chat.id,
+                    "chat_name": get_chat_name(message),
+                    "code": "USDT",
+                    "source": "partner_chat_command",
+                    "idempotency_key": f"{message.chat.id}:{message.message_id}",
+                }
+                if partner_send.amount is None:
+                    await wallet_service.withdraw_all(
+                        **common,
+                        comment=partner_send.raw_text,
+                    )
+                else:
+                    await wallet_service.apply_external_currency_change(
+                        **common,
+                        amount=-partner_send.amount,
+                        expr=partner_send.raw_text,
+                    )
+                return
         try:
             parsed = self.interaction_service.wallet_service.parse_currency_change(
                 raw_text,
                 chat_id=message.chat.id,
             )
         except ValueError as exc:
-            await message.answer(str(exc))
+            await self._answer(message, str(exc))
             return
         if parsed is None:
             return
@@ -169,7 +204,8 @@ class WalletsHandler:
             and request_id
             and not _RE_CASH_REQUEST_ID.fullmatch(request_id)
         ):
-            await message.answer(
+            await self._answer(
+                message,
                 "Для движения клиентской наличности укажите номер заявки, "
                 "например: /usd -125 Б-123456. Связь по имени отключена."
             )
@@ -212,10 +248,11 @@ class WalletsHandler:
                     )
                 )
             except (CashSettlementError, DomainStateError, DomainValidationError) as exc:
-                await message.answer(str(exc))
+                await self._answer(message, str(exc))
                 return
             suffix = " (повтор)" if settled.repeated else ""
-            await message.answer(
+            await self._answer(
+                message,
                 f"✅ Заявка {settled.request_id} проведена: "
                 f"{settled.actual_qty} {settled.currency}{suffix}."
             )
@@ -248,7 +285,12 @@ class WalletsHandler:
                     "\n⚠️ "
                     + (transfer.error or "Не удалось продублировать операцию в чат клиента.")
                 )
-        await message.answer(text, reply_markup=result.reply_markup)
+        await self._answer(message, text, reply_markup=result.reply_markup)
+
+    async def _answer(self, message: Message, text: str, **kwargs: object) -> None:
+        if message.chat.id in self.silent_chat_ids:
+            return
+        await message.answer(text, **kwargs)
 
     async def _buffer_city_cash_media_group(self, message: Message) -> None:
         if not message.media_group_id or not message.photo:

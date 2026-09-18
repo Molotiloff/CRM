@@ -11,6 +11,7 @@ from handlers import (
     ActHandler,
     AdminRequestHandler,
     AMLHandler,
+    BestChangeHandler,
     BroadcastAllHandler,
     CalcHandler,
     CashRequestsHandler,
@@ -31,6 +32,12 @@ from handlers import (
     get_table_delete_router,
     get_table_done_router,
 )
+from handlers.message_archive import MessageArchiveHandler
+from middlewares.message_archive import (
+    IncomingMessageArchiveMiddleware,
+    OutgoingMessageArchiveMiddleware,
+)
+from middlewares.silent_accounting_chats import SilentAccountingChatsMiddleware
 from services.accounting import MidnightProfitCapitalizationJob, ProfitValuationService
 from services.admin_client import (
     ClientBootstrapService,
@@ -41,6 +48,10 @@ from services.admin_client import (
     UsdtWalletService,
 )
 from services.aml import AMLQueueService, AMLService, ThreadedAMLChecker
+from services.best_change import (
+    BestChangeMonthlyReportPublisher,
+    setup_best_change_month_report_scheduler,
+)
 from services.broadcast import BroadcastService
 from services.cash_requests import (
     CMD_MAP,
@@ -61,6 +72,15 @@ from services.client_balances import (
 )
 from services.daily_balances_scheduler import setup_daily_balances_scheduler
 from services.exchange import AcceptShortService
+from services.message_archive import (
+    ArchiveRuntimeMetrics,
+    LocalMediaStorage,
+    MediaDownloadService,
+    MessageArchiveLifecycle,
+    MessageArchiveMonitor,
+    MessageArchiveService,
+    MessageExportService,
+)
 from services.payment_watch import (
     PaymentWatchPoller,
     PaymentWatchService,
@@ -96,6 +116,7 @@ from telegram_adapters import (
     ChatLockRegistry,
     CityCashMediaStore,
 )
+from telegram_adapters.message_archive import AiogramArchiveMediaSource
 
 
 def setup_handlers(
@@ -125,8 +146,65 @@ def setup_handlers(
     request_chat_id = config.request_chat_id
     city_cash_chats = config.city_cash_chat_map
     ignore_chat_ids = set(ignore_chat_ids or [])
+    silent_accounting_chat_ids = {
+        int(chat_id)
+        for chat_id in (config.moscow_poets_chat_id, config.moscow_bs_chat_id)
+        if chat_id is not None
+    }
 
     services = BotRuntimeServices()
+    if config.message_archive_enabled:
+        archive_repository = container.crm_repositories.message_archive
+        archive_metrics = ArchiveRuntimeMetrics()
+        archive_storage = LocalMediaStorage(config.message_archive_media_dir)
+        archive_media = MediaDownloadService(
+            repo=archive_repository,
+            storage=archive_storage,
+            telegram_media=AiogramArchiveMediaSource(bot),
+            workers=config.message_archive_download_workers,
+            queue_size=config.message_archive_download_queue_size,
+        )
+        archive_service = MessageArchiveService(
+            repo=archive_repository,
+            attachment_scheduler=archive_media,
+            metrics=archive_metrics,
+        )
+        archive_monitor = MessageArchiveMonitor(
+            repo=archive_repository,
+            runtime=archive_metrics,
+            media_queue=archive_media,
+        )
+        incoming_archive = IncomingMessageArchiveMiddleware(archive_service)
+        dp.message.outer_middleware(incoming_archive)
+        dp.edited_message.outer_middleware(incoming_archive)
+        dp.channel_post.outer_middleware(incoming_archive)
+        dp.edited_channel_post.outer_middleware(incoming_archive)
+        dp.business_message.outer_middleware(incoming_archive)
+        dp.edited_business_message.outer_middleware(incoming_archive)
+        bot.session.middleware(OutgoingMessageArchiveMiddleware(archive_service))
+
+        archive_handler = MessageArchiveHandler(
+            bot=bot,
+            repo=archive_repository,
+            client_repo=client_repo,
+            manager_repo=manager_repo,
+            export_service=MessageExportService(
+                repo=archive_repository,
+                storage=archive_storage,
+                temp_dir=config.message_archive_temp_dir,
+                part_size=config.message_archive_export_part_bytes,
+            ),
+            admin_chat_id=config.admin_chat_id,
+            admin_user_ids=set(config.admin_ids),
+            export_workers=config.message_archive_export_workers,
+        )
+        dp.include_router(archive_handler.router)
+        services.message_archive = MessageArchiveLifecycle(
+            media=archive_media,
+            monitor=archive_monitor,
+            exports=archive_handler,
+        )
+
     tg_outbox_repository = container.crm_repositories.tg_outbox
     services.tg_outbox_worker = TgOutboxWorker(
         repository=tg_outbox_repository,
@@ -171,7 +249,11 @@ def setup_handlers(
     )
     dp.include_router(usdt_wallet_handler.router)
 
-    start_handler = StartHandler(ClientBootstrapService(client_wallet_repo))
+    start_handler = StartHandler(
+        ClientBootstrapService(client_wallet_repo),
+        silent_chat_ids=silent_accounting_chat_ids,
+        on_silent_wallet_ready=container.accounting.cash_chat_registry.sync,
+    )
     calc_handler = CalcHandler()
     xe_handler = None
     if config.converter_api_base_url and config.converter_api_token:
@@ -231,6 +313,25 @@ def setup_handlers(
     )
     dp.include_router(grinex_book_handler.router)
 
+    if config.best_change_chat_id and container.accounting.best_change:
+        best_change_handler = BestChangeHandler(
+            manager_repo,
+            service=container.accounting.best_change,
+            chat_id=config.best_change_chat_id,
+            admin_chat_ids=admin_chat_list,
+            admin_user_ids=admin_user_list,
+        )
+        dp.include_router(best_change_handler.router)
+        services.best_change_month_report_scheduler = SchedulerLifecycleAdapter(
+            setup_best_change_month_report_scheduler(
+                publisher=BestChangeMonthlyReportPublisher(
+                    service=container.accounting.best_change,
+                    messenger=container.messenger,
+                    chat_id=config.best_change_chat_id,
+                )
+            )
+        )
+
     if config.rate_orders_chat_id:
         services.rate_order_service = RateOrderService(
             repo=rate_order_repo,
@@ -274,9 +375,18 @@ def setup_handlers(
         admin_user_ids=admin_user_list,
         request_chat_id=request_chat_id,
         ignore_chat_ids=None,
+        silent_chat_ids=silent_accounting_chat_ids,
         city_cash_chats=city_cash_chats,
         cash_settlement_service=container.accounting.cash_settlements,
     )
+    if silent_accounting_chat_ids:
+        silent_accounting_middleware = SilentAccountingChatsMiddleware(
+            silent_accounting_chat_ids,
+            start_handler=start_handler._on_start,
+            wallet_change_handler=wallets_handler._on_currency_change,
+        )
+        dp.message.outer_middleware(silent_accounting_middleware)
+        dp.callback_query.outer_middleware(silent_accounting_middleware)
 
     accept_short_service = AcceptShortService(
         repositories.exchange_commands,
@@ -419,7 +529,10 @@ def setup_handlers(
 
     broadcast_all_handler = BroadcastAllHandler(
         manager_repo,
-        broadcast_service=BroadcastService(repo=client_repo),
+        broadcast_service=BroadcastService(
+            repo=client_repo,
+            excluded_chat_ids=silent_accounting_chat_ids,
+        ),
         session_store=AiogramBroadcastSessionStore(),
         preview_builder=AiogramBroadcastPresenter(),
         admin_chat_ids=set(admin_chat_list or []),

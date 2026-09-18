@@ -24,6 +24,12 @@ class ParsedCurrencyChange:
 
 
 @dataclass(slots=True, frozen=True)
+class PartnerUsdtSendCommand:
+    amount: Decimal | None
+    raw_text: str
+
+
+@dataclass(slots=True, frozen=True)
 class CurrencyChangeCommand:
     chat_id: int
     chat_name: str

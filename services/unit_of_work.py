@@ -14,13 +14,16 @@ if TYPE_CHECKING:
         SettlementRepositoryPort,
     )
     from services.accounting.ports import (
+        AccountingImportRepositoryPort,
         CashSettlementRepositoryPort,
         FirmPositionRepositoryPort,
         FulfillmentQueueRepositoryPort,
+        ManualCashRepositoryPort,
         PartnerAllocationRepositoryPort,
         ProfitAccrualRepositoryPort,
         WalletFactRepositoryPort,
     )
+    from services.best_change.service import BestChangeRepositoryPort
     from services.crm.deal_service import DealRepositoryPort
 
 
@@ -37,6 +40,9 @@ class UnitOfWorkPort(Protocol):
     cash_settlements: CashSettlementRepositoryPort
     partner_allocations: PartnerAllocationRepositoryPort
     profit_accruals: ProfitAccrualRepositoryPort
+    accounting_imports: AccountingImportRepositoryPort
+    best_change: BestChangeRepositoryPort
+    manual_cash: ManualCashRepositoryPort
 
     async def __aenter__(self) -> Self: ...
 

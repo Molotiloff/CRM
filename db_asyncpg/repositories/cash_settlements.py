@@ -53,11 +53,15 @@ class CashSettlementRepo(ConnectionBoundRepo):
                        d.body->>'request_kind' AS request_kind,
                        UPPER(d.body->>'currency') AS currency_code,
                        (d.body->>'amount')::numeric AS expected_qty,
+                       COALESCE(client.client_group, '') <> 'internal_wallet'
+                           AS track_client_balance,
                        cash.client_id AS cash_client_id,
                        cash.city AS cash_city
                 FROM deals d
+                JOIN clients client ON client.id = d.client_id
                 LEFT JOIN cash_chat_registry cash
                   ON cash.is_active
+                 AND cash.cash_currency_codes IS NULL
                  AND LOWER(BTRIM(cash.city)) = LOWER(BTRIM(d.city))
                  AND ($2::bigint IS NULL OR cash.chat_id = $2)
                 WHERE d.source_kind = 'cash'
@@ -80,6 +84,7 @@ class CashSettlementRepo(ConnectionBoundRepo):
             city=str(row["city"]).strip().lower(),
             currency=str(row["currency_code"]),
             expected_qty=Decimal(str(row["expected_qty"])),
+            track_client_balance=bool(row["track_client_balance"]),
         )
 
     async def get_by_request(
@@ -107,7 +112,7 @@ class CashSettlementRepo(ConnectionBoundRepo):
         command: CashSettlementCommand,
         actual_qty: Decimal,
         cash_transaction_id: int,
-        client_transaction_id: int,
+        client_transaction_id: int | None,
         position_move_id: int | None,
     ) -> CashSettlementResult:
         async with self._connection() as connection:
@@ -152,7 +157,11 @@ class CashSettlementRepo(ConnectionBoundRepo):
             currency=str(row["currency_code"]),
             actual_qty=Decimal(str(row["actual_qty"])),
             cash_transaction_id=int(row["cash_transaction_id"]),
-            client_transaction_id=int(row["client_transaction_id"]),
+            client_transaction_id=(
+                int(row["client_transaction_id"])
+                if row["client_transaction_id"] is not None
+                else None
+            ),
             position_move_id=(
                 int(row["position_move_id"])
                 if row["position_move_id"] is not None

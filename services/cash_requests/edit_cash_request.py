@@ -32,6 +32,7 @@ class EditCashRequestParams(CashRequestCommand):
     old_text: str
     reply_msg_id: int
     editor_name: str = "unknown"
+    client_group: str | None = None
 
 
 EditCashRequestResult = CashRequestResult
@@ -99,6 +100,7 @@ class EditCashRequest(CashRequestUseCaseBase):
             chat_id=params.chat_id,
             chat_name=params.chat_name,
             city=parsed.city,
+            client_group=params.client_group,
         )
         accounts = await self.repo.snapshot_wallet(ctx.client_id)
         snapshot = self.card_parser.edit_snapshot(

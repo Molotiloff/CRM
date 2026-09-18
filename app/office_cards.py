@@ -7,17 +7,17 @@ from handlers.office_cards import OfficeCard
 OFFICE_CARDS: dict[str, OfficeCard] = {
     "екб": OfficeCard(
         command="екб",
-        photo_file_id="AgACAgIAAyEGAATT2G0dAAObaYl-f3rUjrGP94zHaQhcZEckLgEAAtwQaxvhBFBICMf2mvVQ6e4BAAMCAAN5AAM6BA",
-        image_path=Path("images/ekb_office.jpeg"),
+        photo_file_id=None,
+        image_path=None,
         caption=(
             "📍 <b>Адрес офиса</b>\n"
-            "г. Екатеринбург, ул. <b>Малышева, 51</b>\n"
-            "БЦ «<b>Высоцкий</b>», 7 этаж, офис 7/06\n"
-            "<b>Пропуск</b> — на ресепшене по документу\n\n"
+            "г. Екатеринбург, ул. <b>Белинского, 83</b>\n"
+            "18 этаж, офис 14\n\n"
             "🚗 <b>Бесплатный паркинг</b>\n"
-            "Въезд с <b>ул. Красноармейская</b>\n"
-            "Гостевой пропуск оформляется на <b>офис 7/06</b>,\n"
-            "сдаётся при выезде\n\n"
+            "Находится по адресу: <b>ул. Белинского, 86</b>\n"
+            "в здании через дорогу от офиса.\n"
+            "В ближайшее время также будет доступен паркинг\n"
+            "непосредственно под офисом.\n\n"
             "🔔 <b>Для входа в офис назовите номер заявки в домофон</b>"
         ),
     ),

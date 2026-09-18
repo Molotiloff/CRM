@@ -1,4 +1,5 @@
-# handlers/start.py
+from collections.abc import Awaitable, Callable
+
 from aiogram import Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
@@ -9,8 +10,16 @@ from telegram_adapters.message_context import get_chat_name
 
 
 class StartHandler:
-    def __init__(self, bootstrap_service: ClientBootstrapService) -> None:
+    def __init__(
+        self,
+        bootstrap_service: ClientBootstrapService,
+        *,
+        silent_chat_ids: set[int] | None = None,
+        on_silent_wallet_ready: Callable[[], Awaitable[object]] | None = None,
+    ) -> None:
         self.bootstrap_service = bootstrap_service
+        self.silent_chat_ids = set(silent_chat_ids or set())
+        self.on_silent_wallet_ready = on_silent_wallet_ready
         self.router = Router()
         self._register()
 
@@ -19,6 +28,10 @@ class StartHandler:
         chat_id = message.chat.id
         chat_name = get_chat_name(message)
         await self.bootstrap_service.ensure_client_wallet(chat_id=chat_id, chat_name=chat_name)
+        if chat_id in self.silent_chat_ids:
+            if self.on_silent_wallet_ready is not None:
+                await self.on_silent_wallet_ready()
+            return
 
         text = (
             "👋 Привет! Я бот команды <b>SKYEX</b>.\n\n"

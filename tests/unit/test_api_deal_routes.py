@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from api.dependencies import get_current_user
 from api.exception_handlers import register_exception_handlers
 from api.models import ApiUser, UserRole
+from api.presentation.deals import build_deal_details
 from api.routers import deals
 from api.schemas.common import ErrorResponse
 from api.schemas.deals import DealDetailsResponse, DealsPageResponse
@@ -46,6 +47,23 @@ def test_deal_routes_expose_list_create_update_and_status() -> None:
     assert service.status_payload == {"comment": "rate fixed"}
 
 
+def test_deal_list_accepts_accounting_import_source_kind() -> None:
+    service = FakeDealService()
+    service.row.update(
+        {
+            "source": "import",
+            "source_kind": "accounting_import",
+            "source_ref": "snapshot:deal:1",
+        }
+    )
+    client = TestClient(_app(service))
+
+    response = client.get("/api/v1/deals")
+
+    assert response.status_code == 200
+    DealsPageResponse.model_validate(response.json())
+
+
 def test_deal_detail_route_returns_success_and_not_found_contracts() -> None:
     client = TestClient(_app(FakeDealService()))
 
@@ -57,6 +75,55 @@ def test_deal_detail_route_returns_success_and_not_found_contracts() -> None:
     assert missing.status_code == 404
     error = ErrorResponse.model_validate(missing.json())
     assert error.detail == "Deal 404 was not found"
+
+
+def test_best_change_details_are_explicit_and_include_correction_link() -> None:
+    now = datetime.now(UTC)
+    details = build_deal_details(
+        Deal.from_record(
+            {
+                "id": 18,
+                "deal_no": 100018,
+                "deal_type": "best_change",
+                "city": "члб",
+                "status": "done",
+                "source": "tg_bot",
+                "source_kind": "best_change",
+                "created_by_name": "Manager",
+                "profit": "175",
+                "deal_at": "2026-08-31",
+                "created_at": now,
+                "updated_at": now,
+                "corrected_from_deal_id": 17,
+                "correction_reason": "Исправлен курс",
+                "correction_actor_name": "Manager",
+                "body": {
+                    "operation_kind": "sale",
+                    "qty_usdt": "1000",
+                    "market_rate_rub": "87",
+                    "client_rate_rub": "87.5",
+                    "unit_spread_rub": "0.5",
+                    "gross_spread_rub": "500",
+                    "profit_pool_rub": "350",
+                    "partner_share_rub": "175",
+                    "skyex_profit_rub": "175",
+                    "platform_fee_usdt": "1.714286",
+                },
+            }
+        )
+    )
+
+    assert details.deal.clientName == "BestChange"
+    assert details.deal.asset == "USDT"
+    assert details.deal.direction == "USDT → RUB"
+    assert details.deal.amountRub == 87500
+    assert details.dealAt == "2026-08-31"
+    assert details.bestChange is not None
+    assert details.bestChange.qtyUsdt == 1000
+    assert details.bestChange.marketRateRub == 87
+    assert details.bestChange.clientRateRub == 87.5
+    assert details.bestChange.originalDealId == "17"
+    assert details.bestChange.correctionReason == "Исправлен курс"
 
 
 def test_deal_write_route_rejects_cashier() -> None:

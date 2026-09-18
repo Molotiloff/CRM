@@ -152,6 +152,43 @@ async def test_duplicate_command_is_idempotent(pool, repo, client_id) -> None:
     assert await balance_of(repo, cash_client_id, "USD") == Decimal("1000")
 
 
+async def test_internal_wallet_request_updates_only_city_cash(
+    pool, repo, client_id
+) -> None:
+    await ClientsRepo(pool).set_client_group_by_chat_id(CLIENT_CHAT, "internal_wallet")
+    cash_client_id = await _cash(pool, chat_id=CASH_CHAT, city="екб", code="RUB")
+    await repo.deposit(
+        client_id=cash_client_id,
+        currency_code="RUB",
+        amount=Decimal("1000"),
+        source="test",
+        idempotency_key="admin-cash-opening",
+    )
+    await _deal(
+        pool,
+        client_id=client_id,
+        request_id="Б-100007",
+        kind="wd",
+        amount=Decimal("125"),
+        currency="RUB",
+    )
+    service = _service(pool)
+    await service.mark_ready(request_id="Б-100007", actor_tg_user_id=77)
+
+    result = await service.settle(
+        _command("Б-100007", Decimal("-125"), currency="RUB")
+    )
+
+    assert result.client_transaction_id is None
+    assert await balance_of(repo, client_id, "RUB") == 0
+    assert await balance_of(repo, cash_client_id, "RUB") == Decimal("875")
+    async with pool.acquire() as connection:
+        assert await connection.fetchval(
+            "SELECT client_transaction_id FROM cash_settlements WHERE request_id = $1",
+            "Б-100007",
+        ) is None
+
+
 async def test_wrong_city_or_request_does_not_write(pool, repo, client_id) -> None:
     await repo.add_currency(client_id, "USD", 2)
     cash_client_id = await _cash(pool, chat_id=CASH_CHAT, city="екб", code="USD")
@@ -259,12 +296,13 @@ def _command(
     signed_qty: Decimal,
     *,
     chat_id: int = CASH_CHAT,
+    currency: str = "USD",
 ) -> CashSettlementCommand:
     return CashSettlementCommand(
         request_id=request_id,
         city_chat_id=chat_id,
         command_message_id=501,
-        currency="USD",
+        currency=currency,
         signed_qty=signed_qty,
         actor_tg_user_id=77,
         evidence={"photoFileId": "cash-proof"},
@@ -296,6 +334,7 @@ async def _deal(
     request_id: str,
     kind: str,
     amount: Decimal,
+    currency: str = "USD",
 ) -> int:
     deal, _ = await DealRepository(pool).create_deal_idempotent(
         DealCreateCommand(
@@ -309,7 +348,7 @@ async def _deal(
             body={
                 "req_id": request_id,
                 "request_kind": kind,
-                "currency": "USD",
+                "currency": currency,
                 "amount": str(amount),
             },
         )

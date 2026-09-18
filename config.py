@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from ipaddress import ip_address
 
 from services.aml.getblock_settings import GetBlockSettings
@@ -31,6 +32,16 @@ def _parse_bool(s: str | None, *, default: bool) -> bool:
     if not raw:
         return default
     return raw in {"1", "true", "yes", "on"}
+
+
+def _parse_nonnegative_decimal(s: str | None, *, default: str, name: str) -> Decimal:
+    try:
+        value = Decimal((s or default).strip())
+    except InvalidOperation:
+        raise RuntimeError(f"Некорректный {name}") from None
+    if not value.is_finite() or value < 0:
+        raise RuntimeError(f"Некорректный {name}")
+    return value
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -118,10 +129,16 @@ class Config:
     # чат для ордеров по курсу
     rate_orders_chat_id: int | None
 
+    # чат для сделок BestChange
+    best_change_chat_id: int | None
+
     default_city: str  # например "екб"
 
     # город -> операционный чат физической кассы
     city_cash_chat_map: dict[str, int]
+    # Гибридные московские чаты: RUB — касса, остальные валюты — клиентские.
+    moscow_poets_chat_id: int | None
+    moscow_bs_chat_id: int | None
     getblock: GetBlockSettings | None
     api_enabled: bool
     api_host: str
@@ -131,6 +148,15 @@ class Config:
     api_dev_auth_bypass: bool
     api_dev_tg_user_id: int | None
     main_dashboard_source_mode: str = "sheets"
+    dashboard_shadow_absolute_tolerance: Decimal = Decimal("0.01")
+    dashboard_shadow_relative_tolerance: Decimal = Decimal("0.000001")
+    message_archive_enabled: bool = False
+    message_archive_media_dir: str = "message_archive_data/media"
+    message_archive_temp_dir: str = "message_archive_data/tmp"
+    message_archive_download_workers: int = 2
+    message_archive_download_queue_size: int = 500
+    message_archive_export_workers: int = 1
+    message_archive_export_part_bytes: int = 45 * 1024 * 1024
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -180,6 +206,7 @@ class Config:
 
         schedule_chat_ids = _parse_ids_set(os.getenv("SCHEDULE_CHAT_IDS"))
         rate_orders_chat_id = _parse_int(os.getenv("RATE_ORDERS_CHAT_ID"))
+        best_change_chat_id = _parse_int(os.getenv("BEST_CHANGE_CHAT_ID"))
 
         default_city = (os.getenv("DEFAULT_CITY", "екб") or "екб").strip().lower()
 
@@ -188,6 +215,8 @@ class Config:
             env_name="CITY_CASH_CHAT_IDS",
             unique_chat_ids=True,
         )
+        moscow_poets_chat_id = _parse_int(os.getenv("MOSCOW_POETS_CHAT_ID"))
+        moscow_bs_chat_id = _parse_int(os.getenv("MOSCOW_BS_CHAT_ID"))
 
         getblock_identity = os.getenv("GETBLOCK_IDENTITY", "").strip()
         getblock_password = os.getenv("GETBLOCK_PASSWORD", "").strip()
@@ -231,6 +260,49 @@ class Config:
             "db_only",
         }:
             raise RuntimeError("Некорректный MAIN_DASHBOARD_SOURCE_MODE")
+        dashboard_shadow_absolute_tolerance = _parse_nonnegative_decimal(
+            os.getenv("DASHBOARD_SHADOW_ABSOLUTE_TOLERANCE"),
+            default="0.01",
+            name="DASHBOARD_SHADOW_ABSOLUTE_TOLERANCE",
+        )
+        dashboard_shadow_relative_tolerance = _parse_nonnegative_decimal(
+            os.getenv("DASHBOARD_SHADOW_RELATIVE_TOLERANCE"),
+            default="0.000001",
+            name="DASHBOARD_SHADOW_RELATIVE_TOLERANCE",
+        )
+        message_archive_enabled = _parse_bool(
+            os.getenv("MESSAGE_ARCHIVE_ENABLED"),
+            default=False,
+        )
+        message_archive_media_dir = (
+            os.getenv("MESSAGE_ARCHIVE_MEDIA_DIR", "message_archive_data/media").strip()
+            or "message_archive_data/media"
+        )
+        message_archive_temp_dir = (
+            os.getenv("MESSAGE_ARCHIVE_TEMP_DIR", "message_archive_data/tmp").strip()
+            or "message_archive_data/tmp"
+        )
+        message_archive_download_workers = max(
+            1,
+            int(os.getenv("MESSAGE_ARCHIVE_DOWNLOAD_WORKERS", "2")),
+        )
+        message_archive_download_queue_size = max(
+            1,
+            int(os.getenv("MESSAGE_ARCHIVE_DOWNLOAD_QUEUE_SIZE", "500")),
+        )
+        message_archive_export_workers = max(
+            1,
+            int(os.getenv("MESSAGE_ARCHIVE_EXPORT_WORKERS", "1")),
+        )
+        message_archive_export_part_bytes = max(
+            1024 * 1024,
+            int(
+                os.getenv(
+                    "MESSAGE_ARCHIVE_EXPORT_PART_BYTES",
+                    str(45 * 1024 * 1024),
+                )
+            ),
+        )
         if api_dev_auth_bypass and not _is_loopback_host(api_host):
             raise RuntimeError(
                 "CRM_DEV_AUTH_BYPASS разрешён только для loopback CRM_API_HOST"
@@ -253,8 +325,11 @@ class Config:
             city_schedule_chats=city_schedule_chats,
             schedule_chat_ids=schedule_chat_ids,
             rate_orders_chat_id=rate_orders_chat_id,
+            best_change_chat_id=best_change_chat_id,
             default_city=default_city,
             city_cash_chat_map=city_cash_chat_map,
+            moscow_poets_chat_id=moscow_poets_chat_id,
+            moscow_bs_chat_id=moscow_bs_chat_id,
             getblock=getblock,
             api_enabled=api_enabled,
             api_host=api_host,
@@ -264,6 +339,15 @@ class Config:
             api_dev_auth_bypass=api_dev_auth_bypass,
             api_dev_tg_user_id=api_dev_tg_user_id,
             main_dashboard_source_mode=main_dashboard_source_mode,
+            dashboard_shadow_absolute_tolerance=dashboard_shadow_absolute_tolerance,
+            dashboard_shadow_relative_tolerance=dashboard_shadow_relative_tolerance,
+            message_archive_enabled=message_archive_enabled,
+            message_archive_media_dir=message_archive_media_dir,
+            message_archive_temp_dir=message_archive_temp_dir,
+            message_archive_download_workers=message_archive_download_workers,
+            message_archive_download_queue_size=message_archive_download_queue_size,
+            message_archive_export_workers=message_archive_export_workers,
+            message_archive_export_part_bytes=message_archive_export_part_bytes,
         )
 
     @property

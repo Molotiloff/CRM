@@ -41,7 +41,12 @@ async def test_midnight_capitalization_is_atomic_idempotent_and_fact_neutral(
 
     async with pool.acquire() as connection:
         deal_id = await connection.fetchval(
-            "INSERT INTO deals(deal_type, status, source) VALUES ('profit', 'done', 'crm') RETURNING id"
+            """
+            INSERT INTO deals(deal_type, status, source, deal_at)
+            VALUES ('profit', 'done', 'crm', $1)
+            RETURNING id
+            """,
+            business_date,
         )
         await connection.execute(
             """

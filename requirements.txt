@@ -16,3 +16,4 @@ websockets==16.0
 requests==2.33.0
 beautifulsoup4==4.13.5
 Pillow==12.2.0
+ijson==3.4.0.post0

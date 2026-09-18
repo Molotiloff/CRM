@@ -71,6 +71,9 @@ class CashRequestsHandler:
             return
         messenger = AiogramMessenger(message.bot)
         replier = AiogramMessageReplier(message)
+        client_group = (
+            "internal_wallet" if message.chat.id in self.admin_chat_ids else None
+        )
 
         async def sync_schedule(city: str) -> None:
             await self.request_service.schedule_service.sync_board(
@@ -94,6 +97,7 @@ class CashRequestsHandler:
                     old_text=_plain_text(reply),
                     reply_msg_id=reply.message_id,
                     editor_name=actor_from_message(message),
+                    client_group=client_group,
                 ),
                 messenger=messenger,
                 replier=replier,
@@ -108,6 +112,7 @@ class CashRequestsHandler:
                 parsed=parsed,
                 creator_name=actor_from_message(message),
                 source_message_id=message.message_id,
+                client_group=client_group,
             ),
             messenger=messenger,
             replier=replier,

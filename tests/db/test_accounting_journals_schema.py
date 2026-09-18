@@ -154,6 +154,72 @@ async def test_cash_registry_sync_links_existing_clients_without_moving_balances
 
 
 @pytest.mark.asyncio
+async def test_cash_registry_sync_allows_multiple_scoped_locations_in_moscow(pool) -> None:
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            INSERT INTO clients(chat_id, name)
+            VALUES (-211, 'Поэты'), (-212, 'BS')
+            """
+        )
+
+    result = await CashChatRegistrySyncService(
+        CashChatRegistryRepo(pool),
+        city_cash_chats={},
+        moscow_rub_cash_chats={"Поэты": -211, "BS": -212},
+    ).sync()
+
+    assert result.inserted == 2
+    async with pool.acquire() as connection:
+        rows = await connection.fetch(
+            """
+            SELECT city, location_name, cash_currency_codes
+            FROM cash_chat_registry
+            WHERE is_active
+            ORDER BY location_name
+            """
+        )
+    assert [
+        (row["city"], row["location_name"], row["cash_currency_codes"])
+        for row in rows
+    ] == [
+        ("мск", "BS", ["RUB"]),
+        ("мск", "Поэты", ["RUB"]),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_scoped_cash_registry_waits_for_silent_chat_bootstrap(pool) -> None:
+    service = CashChatRegistrySyncService(
+        CashChatRegistryRepo(pool),
+        city_cash_chats={},
+        moscow_rub_cash_chats={"Поэты": -213},
+    )
+
+    pending = await service.sync()
+    assert pending.configured == 1
+    assert pending.inserted == 0
+
+    async with pool.acquire() as connection:
+        client_id = await connection.fetchval(
+            "INSERT INTO clients(chat_id, name) VALUES (-213, 'Поэты') RETURNING id"
+        )
+
+    activated = await service.sync()
+    assert activated.inserted == 1
+    async with pool.acquire() as connection:
+        row = await connection.fetchrow(
+            """
+            SELECT client_id, cash_currency_codes
+            FROM cash_chat_registry
+            WHERE chat_id = -213 AND is_active
+            """
+        )
+    assert row["client_id"] == client_id
+    assert row["cash_currency_codes"] == ["RUB"]
+
+
+@pytest.mark.asyncio
 async def test_cash_ledger_is_the_only_cash_balance_read_source(pool) -> None:
     async with pool.acquire() as connection:
         cash_client = await connection.fetchval(
@@ -194,6 +260,60 @@ async def test_cash_ledger_is_the_only_cash_balance_read_source(pool) -> None:
         ("EUR", Decimal("75.00000000")),
         ("RUB", Decimal("1250.00000000")),
     }
+
+
+@pytest.mark.asyncio
+async def test_scoped_cash_chat_splits_rub_cash_from_client_currencies(pool) -> None:
+    async with pool.acquire() as connection:
+        poets_client = await connection.fetchval(
+            "INSERT INTO clients(chat_id, name) VALUES (-302, 'Поэты') RETURNING id"
+        )
+        await connection.execute(
+            """
+            INSERT INTO client_accounts(client_id, currency_code, precision, balance)
+            VALUES ($1, 'RUB', 2, -57565), ($1, 'EUR', 2, 75),
+                   ($1, 'USDT', 6, 125.5)
+            """,
+            poets_client,
+        )
+        await connection.execute(
+            """
+            INSERT INTO cash_chat_registry(
+                chat_id, client_id, city, location_name, cash_currency_codes
+            ) VALUES (-302, $1, 'мск', 'Поэты', ARRAY['RUB'])
+            """,
+            poets_client,
+        )
+        await connection.execute(
+            """
+            INSERT INTO cash_desks(city, name, currency_code, balance)
+            VALUES ('мск', 'Поэты', 'RUB', -57565)
+            """
+        )
+
+    dashboard = await DashboardReadRepository(pool).get_snapshot(
+        business_date=datetime.now(UTC).date()
+    )
+    visible_balances = await BalanceReadRepository(pool).nonzero_balances()
+    client_totals = await CrmStatsRepo(pool).client_balances_by_currency()
+    cash_balances = await CrmStatsRepo(pool).cash_ledger_balances()
+
+    eur = next(item for item in dashboard.currencies if item.code == "EUR")
+    usdt = next(item for item in dashboard.currencies if item.code == "USDT")
+    assert dashboard.reconciliation.rub_cash == Decimal("-57565.00000000")
+    assert eur.client_qty == Decimal("75.00000000")
+    assert usdt.client_qty == Decimal("125.50000000")
+    assert {(row["currency_code"], row["balance"]) for row in visible_balances} == {
+        ("EUR", Decimal("75.00000000")),
+        ("USDT", Decimal("125.50000000")),
+    }
+    assert client_totals == {
+        "EUR": Decimal("75.00000000"),
+        "USDT": Decimal("125.50000000"),
+    }
+    assert [(row["currency_code"], row["balance"]) for row in cash_balances] == [
+        ("RUB", Decimal("-57565.00000000"))
+    ]
 
 
 @pytest.mark.asyncio

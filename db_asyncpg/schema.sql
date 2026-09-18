@@ -293,12 +293,16 @@ CREATE TABLE IF NOT EXISTS counterparties (
 --   deposit/withdrawal/delivery: {amount, denomination, courier_user_id,
 --              courier_reward, address, scheduled_at}
 --   profit:   {amount_expr}
+--   best_change: {operation_kind, qty_usdt, market_rate_rub, client_rate_rub,
+--                 unit_spread_rub, gross_spread_rub,
+--                 platform_fee_rub_equivalent, platform_fee_usdt,
+--                 profit_pool_rub, partner_share_rub, skyex_profit_rub}
 CREATE TABLE IF NOT EXISTS deals (
     id BIGSERIAL PRIMARY KEY,
     deal_no BIGINT NOT NULL DEFAULT nextval('request_id_seq'),   -- сквозной номер
     deal_type TEXT NOT NULL CHECK (deal_type IN
         ('sale','purchase','deposit','withdrawal','delivery','transfer_city',
-         'conversion','yuan','invoice','profit')),
+         'conversion','yuan','invoice','profit','best_change')),
     city TEXT NOT NULL DEFAULT 'Екб',
     client_id BIGINT REFERENCES clients(id),
     counterparty_id BIGINT REFERENCES counterparties(id),
@@ -366,6 +370,169 @@ CREATE TABLE IF NOT EXISTS deal_legs (
 );
 CREATE INDEX IF NOT EXISTS idx_deal_legs_deal ON deal_legs(deal_id);
 
+-- Расчётные счета BestChange. Четыре фонда прибыли ведутся в RUB, комиссия
+-- CoinDrop — в USDT. Это не client/internal accounts и в балансовые итоги
+-- главной повторно не входит. --------------------------------------------------
+CREATE TABLE IF NOT EXISTS best_change_month_closures (
+    id BIGSERIAL PRIMARY KEY,
+    chat_id BIGINT NOT NULL,
+    period_month DATE NOT NULL CHECK (period_month = date_trunc('month', period_month)::date),
+    purchase_tym_rub NUMERIC(38,8) NOT NULL,
+    sale_tym_rub NUMERIC(38,8) NOT NULL,
+    purchase_chlb_rub NUMERIC(38,8) NOT NULL,
+    sale_chlb_rub NUMERIC(38,8) NOT NULL,
+    profit_pool_rub NUMERIC(38,8) NOT NULL,
+    partner_share_rub NUMERIC(38,8) NOT NULL,
+    skyex_profit_rub NUMERIC(38,8) NOT NULL,
+    platform_fee_accrued_usdt NUMERIC(38,8) NOT NULL,
+    platform_fee_paid_usdt NUMERIC(38,8) NOT NULL DEFAULT 0,
+    platform_fee_delta_usdt NUMERIC(38,8) NOT NULL,
+    payment_reference TEXT,
+    deal_ids JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(deal_ids) = 'array'),
+    status TEXT NOT NULL DEFAULT 'closed' CHECK (status IN ('closed', 'reversed')),
+    closed_by BIGINT NOT NULL REFERENCES users(id),
+    closed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    idempotency_key TEXT NOT NULL UNIQUE,
+    reversal_of_id BIGINT REFERENCES best_change_month_closures(id),
+    comment TEXT,
+    CHECK (profit_pool_rub = purchase_tym_rub + sale_tym_rub
+                            + purchase_chlb_rub + sale_chlb_rub),
+    CHECK (profit_pool_rub = partner_share_rub + skyex_profit_rub),
+    CHECK (platform_fee_paid_usdt >= 0),
+    CHECK (platform_fee_delta_usdt = platform_fee_accrued_usdt - platform_fee_paid_usdt),
+    CHECK (reversal_of_id IS NULL OR NULLIF(BTRIM(comment), '') IS NOT NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_best_change_active_month_close
+    ON best_change_month_closures(chat_id, period_month)
+    WHERE status = 'closed' AND reversal_of_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_best_change_month_close_reversal
+    ON best_change_month_closures(reversal_of_id)
+    WHERE reversal_of_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS best_change_account_moves (
+    id BIGSERIAL PRIMARY KEY,
+    chat_id BIGINT NOT NULL,
+    account_code TEXT NOT NULL CHECK (account_code IN (
+        'purchase_tym', 'sale_tym', 'purchase_chlb', 'sale_chlb', 'platform_fee'
+    )),
+    currency_code TEXT NOT NULL CHECK (currency_code IN ('RUB', 'USDT')),
+    amount NUMERIC(38,8) NOT NULL CHECK (amount <> 0),
+    balance_after NUMERIC(38,8) NOT NULL,
+    deal_id BIGINT REFERENCES deals(id),
+    closure_id BIGINT REFERENCES best_change_month_closures(id),
+    actor_user_id BIGINT REFERENCES users(id),
+    comment TEXT,
+    idempotency_key TEXT NOT NULL,
+    reversal_of_id BIGINT REFERENCES best_change_account_moves(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (
+        (account_code = 'platform_fee' AND currency_code = 'USDT')
+        OR (account_code <> 'platform_fee' AND currency_code = 'RUB')
+    ),
+    CHECK (reversal_of_id IS NULL OR NULLIF(BTRIM(comment), '') IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_best_change_moves_account
+    ON best_change_account_moves(chat_id, account_code, id);
+CREATE INDEX IF NOT EXISTS idx_best_change_moves_deal
+    ON best_change_account_moves(deal_id);
+CREATE INDEX IF NOT EXISTS idx_best_change_moves_closure
+    ON best_change_account_moves(closure_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_best_change_moves_idempotency
+    ON best_change_account_moves(idempotency_key);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_best_change_moves_reversal
+    ON best_change_account_moves(reversal_of_id) WHERE reversal_of_id IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION prevent_best_change_move_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'best_change_account_moves is append-only';
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_best_change_moves_append_only ON best_change_account_moves;
+CREATE TRIGGER trg_best_change_moves_append_only
+BEFORE UPDATE OR DELETE ON best_change_account_moves
+FOR EACH ROW
+EXECUTE FUNCTION prevent_best_change_move_mutation();
+
+CREATE TABLE IF NOT EXISTS best_change_payments (
+    id BIGSERIAL PRIMARY KEY,
+    closure_id BIGINT NOT NULL REFERENCES best_change_month_closures(id),
+    payment_kind TEXT NOT NULL CHECK (payment_kind IN ('partner', 'coindrop')),
+    currency_code TEXT NOT NULL CHECK (currency_code IN ('RUB', 'USDT')),
+    amount NUMERIC(38,8) NOT NULL CHECK (amount <> 0),
+    payment_reference TEXT NOT NULL CHECK (NULLIF(BTRIM(payment_reference), '') IS NOT NULL),
+    actor_user_id BIGINT NOT NULL REFERENCES users(id),
+    source_ref TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    reversal_of_id BIGINT REFERENCES best_change_payments(id),
+    comment TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (
+        (payment_kind = 'partner' AND currency_code = 'RUB')
+        OR (payment_kind = 'coindrop' AND currency_code = 'USDT')
+    ),
+    CHECK (
+        (reversal_of_id IS NULL AND amount > 0)
+        OR (
+            reversal_of_id IS NOT NULL
+            AND amount < 0
+            AND NULLIF(BTRIM(comment), '') IS NOT NULL
+        )
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_best_change_payments_closure
+    ON best_change_payments(closure_id, payment_kind, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_best_change_payment_source
+    ON best_change_payments(source_ref);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_best_change_payment_reversal
+    ON best_change_payments(reversal_of_id)
+    WHERE reversal_of_id IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION prevent_best_change_payment_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'best_change_payments is append-only';
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_best_change_payments_append_only ON best_change_payments;
+CREATE TRIGGER trg_best_change_payments_append_only
+BEFORE UPDATE OR DELETE ON best_change_payments
+FOR EACH ROW
+EXECUTE FUNCTION prevent_best_change_payment_mutation();
+
+CREATE TABLE IF NOT EXISTS best_change_deal_corrections (
+    id BIGSERIAL PRIMARY KEY,
+    original_deal_id BIGINT NOT NULL REFERENCES deals(id),
+    replacement_deal_id BIGINT NOT NULL UNIQUE REFERENCES deals(id),
+    actor_user_id BIGINT NOT NULL REFERENCES users(id),
+    source_ref TEXT NOT NULL UNIQUE,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    reason TEXT NOT NULL CHECK (NULLIF(BTRIM(reason), '') IS NOT NULL),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (original_deal_id)
+);
+CREATE INDEX IF NOT EXISTS idx_best_change_corrections_original
+    ON best_change_deal_corrections(original_deal_id);
+
+CREATE OR REPLACE FUNCTION prevent_best_change_correction_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'best_change_deal_corrections is append-only';
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_best_change_corrections_append_only
+    ON best_change_deal_corrections;
+CREATE TRIGGER trg_best_change_corrections_append_only
+BEFORE UPDATE OR DELETE ON best_change_deal_corrections
+FOR EACH ROW
+EXECUTE FUNCTION prevent_best_change_correction_mutation();
+
 -- История статусов (шаг 5 целевого flow) ----------------------------------------
 CREATE TABLE IF NOT EXISTS deal_status_events (
     id BIGSERIAL PRIMARY KEY,
@@ -408,10 +575,31 @@ CREATE TABLE IF NOT EXISTS cash_desk_moves (     -- перемещения ме�
     deal_id BIGINT REFERENCES deals(id),
     actor_user_id BIGINT REFERENCES users(id),
     comment TEXT,
+    operation_kind TEXT NOT NULL DEFAULT 'transfer' CHECK (operation_kind IN (
+        'transfer', 'opening', 'inflow', 'outflow', 'reversal'
+    )),
+    effective_at DATE NOT NULL DEFAULT CURRENT_DATE,
+    idempotency_key TEXT,
+    reversal_of_id BIGINT REFERENCES cash_desk_moves(id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_cash_desk_moves_from ON cash_desk_moves(from_desk_id, id);
 CREATE INDEX IF NOT EXISTS idx_cash_desk_moves_to ON cash_desk_moves(to_desk_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cash_desk_moves_idempotency
+    ON cash_desk_moves(idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cash_desk_moves_reversal
+    ON cash_desk_moves(reversal_of_id) WHERE reversal_of_id IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION prevent_cash_desk_move_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'cash_desk_moves is append-only';
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_cash_desk_moves_append_only ON cash_desk_moves;
+CREATE TRIGGER trg_cash_desk_moves_append_only
+BEFORE UPDATE OR DELETE ON cash_desk_moves
+FOR EACH ROW EXECUTE FUNCTION prevent_cash_desk_move_mutation();
 
 -- Расходы (лист «Расходы»: постоянные + переменные) ------------------------------
 CREATE TABLE IF NOT EXISTS expenses (
@@ -424,11 +612,14 @@ CREATE TABLE IF NOT EXISTS expenses (
     comment TEXT,
     expense_at DATE NOT NULL DEFAULT CURRENT_DATE,
     created_by BIGINT REFERENCES users(id),
+    idempotency_key TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_expenses_at ON expenses(expense_at);
 CREATE INDEX IF NOT EXISTS idx_expenses_kind_at ON expenses(kind, expense_at);
 CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_expenses_idempotency
+    ON expenses(idempotency_key) WHERE idempotency_key IS NOT NULL;
 
 -- Оборотка: владельцы капитала и вложения (лист «Оборотка») ----------------------
 CREATE TABLE IF NOT EXISTS capital_owners (
@@ -443,9 +634,12 @@ CREATE TABLE IF NOT EXISTS capital_moves (       -- журнал вкладов/
     amount NUMERIC(38,8) NOT NULL,               -- + вклад / − вывод
     move_at DATE NOT NULL DEFAULT CURRENT_DATE,
     comment TEXT,
+    idempotency_key TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_capital_moves_owner ON capital_moves(owner_id, move_at);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_capital_moves_idempotency
+    ON capital_moves(idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE TABLE IF NOT EXISTS capital_payouts (     -- фактические выплаты владельцам (правая табличка листа)
     id BIGSERIAL PRIMARY KEY,
     owner_id BIGINT NOT NULL REFERENCES capital_owners(id),
@@ -518,17 +712,21 @@ CREATE TABLE IF NOT EXISTS firm_wallet_facts (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Внутренние балансы SkyEx («Балансы SkyEx» на Главной: Баланс ВВ, Никита, Влад,
--- Лев, Монах, Миша, б_бабушка, б_сочи, б_костет, «разрыв 17.10»…) ----------------
--- Это НЕ клиенты и НЕ кассы.
+-- Внутренние балансы SkyEx («Балансы SkyEx» на Главной: займы, сберегательный
+-- фонд, технические разрывы и инвестиционные корректировки). Балансы сотрудников
+-- ведутся в client_accounts и здесь не дублируются. Это НЕ клиенты и НЕ кассы. ---
 CREATE TABLE IF NOT EXISTS internal_accounts (
     id BIGSERIAL PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     kind TEXT NOT NULL DEFAULT 'employee'
         CHECK (kind IN ('employee','partner','owner_pledge','tech')),  -- tech = разрывы/фиксации
-    balance NUMERIC(38,8) NOT NULL DEFAULT 0,    -- RUB-эквивалент, знаковый
+    currency_code TEXT NOT NULL DEFAULT 'RUB'
+        CHECK (currency_code IN ('RUB','EUR','USDT','USD_BL','USD_WH')),
+    balance NUMERIC(38,8) NOT NULL DEFAULT 0,    -- сумма в currency_code, знаковая
     is_active BOOLEAN NOT NULL DEFAULT TRUE
 );
+CREATE INDEX IF NOT EXISTS idx_internal_accounts_active_currency
+    ON internal_accounts(currency_code) WHERE is_active;
 CREATE TABLE IF NOT EXISTS internal_account_moves (
     id BIGSERIAL PRIMARY KEY,
     account_id BIGINT NOT NULL REFERENCES internal_accounts(id),
@@ -646,14 +844,26 @@ CREATE TABLE IF NOT EXISTS cash_chat_registry (
     client_id BIGINT NOT NULL UNIQUE REFERENCES clients(id),
     city TEXT NOT NULL CHECK (NULLIF(BTRIM(city), '') IS NOT NULL),
     location_name TEXT NOT NULL CHECK (NULLIF(BTRIM(location_name), '') IS NOT NULL),
+    cash_currency_codes TEXT[] CHECK (
+        cash_currency_codes IS NULL
+        OR (
+            CARDINALITY(cash_currency_codes) > 0
+            AND ARRAY_POSITION(cash_currency_codes, NULL) IS NULL
+            AND cash_currency_codes::text = UPPER(cash_currency_codes::text)
+        )
+    ),
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_by BIGINT REFERENCES users(id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deactivated_at TIMESTAMPTZ,
     CHECK ((is_active AND deactivated_at IS NULL) OR (NOT is_active AND deactivated_at IS NOT NULL))
 );
-CREATE UNIQUE INDEX IF NOT EXISTS uq_cash_chat_registry_active_city
-    ON cash_chat_registry(LOWER(BTRIM(city))) WHERE is_active;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cash_chat_registry_active_full_city
+    ON cash_chat_registry(LOWER(BTRIM(city)))
+    WHERE is_active AND cash_currency_codes IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cash_chat_registry_active_location
+    ON cash_chat_registry(LOWER(BTRIM(city)), LOWER(BTRIM(location_name)))
+    WHERE is_active;
 CREATE INDEX IF NOT EXISTS idx_cash_chat_registry_active_client
     ON cash_chat_registry(client_id) WHERE is_active;
 
@@ -774,7 +984,7 @@ CREATE TABLE IF NOT EXISTS cash_settlements (
     command_chat_id BIGINT NOT NULL,
     command_message_id BIGINT NOT NULL,
     cash_transaction_id BIGINT NOT NULL UNIQUE REFERENCES transactions(id),
-    client_transaction_id BIGINT NOT NULL UNIQUE REFERENCES transactions(id),
+    client_transaction_id BIGINT UNIQUE REFERENCES transactions(id),
     position_move_id BIGINT UNIQUE REFERENCES firm_position_moves(id),
     evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
     settled_by_tg_user_id BIGINT,
@@ -915,3 +1125,210 @@ DROP TRIGGER IF EXISTS trg_firm_wallet_fact_snapshots_append_only
 CREATE TRIGGER trg_firm_wallet_fact_snapshots_append_only
 BEFORE UPDATE OR DELETE ON firm_wallet_fact_snapshots
 FOR EACH ROW EXECUTE FUNCTION prevent_accounting_snapshot_mutation();
+
+CREATE TABLE IF NOT EXISTS accounting_import_runs (
+    id BIGSERIAL PRIMARY KEY,
+    source_name TEXT NOT NULL CHECK (NULLIF(BTRIM(source_name), '') IS NOT NULL),
+    manifest_checksum TEXT NOT NULL CHECK (NULLIF(BTRIM(manifest_checksum), '') IS NOT NULL),
+    status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+    checkpoint INTEGER NOT NULL DEFAULT 0 CHECK (checkpoint >= 0),
+    record_count INTEGER NOT NULL CHECK (record_count >= 0),
+    strategy JSONB NOT NULL DEFAULT '{}'::jsonb,
+    control_totals JSONB NOT NULL DEFAULT '{}'::jsonb,
+    error_kind TEXT,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (source_name, manifest_checksum),
+    CHECK ((status = 'completed') = (completed_at IS NOT NULL))
+);
+
+CREATE TABLE IF NOT EXISTS accounting_import_records (
+    id BIGSERIAL PRIMARY KEY,
+    run_id BIGINT NOT NULL REFERENCES accounting_import_runs(id),
+    source_name TEXT NOT NULL,
+    entity_kind TEXT NOT NULL,
+    source_key TEXT NOT NULL,
+    payload_checksum TEXT NOT NULL,
+    sequence_no INTEGER NOT NULL CHECK (sequence_no > 0),
+    target_table TEXT NOT NULL,
+    target_id BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (source_name, entity_kind, source_key),
+    UNIQUE (run_id, sequence_no)
+);
+
+CREATE TABLE IF NOT EXISTS dashboard_shadow_reports (
+    id BIGSERIAL PRIMARY KEY,
+    business_date DATE NOT NULL,
+    primary_source TEXT NOT NULL CHECK (primary_source IN ('sheets', 'postgres')),
+    status TEXT NOT NULL CHECK (status IN ('matched', 'mismatched')),
+    compared_fields INTEGER NOT NULL CHECK (compared_fields >= 0),
+    mismatch_count INTEGER NOT NULL CHECK (mismatch_count >= 0),
+    absolute_tolerance NUMERIC(38,8) NOT NULL CHECK (absolute_tolerance >= 0),
+    relative_tolerance NUMERIC(38,8) NOT NULL CHECK (relative_tolerance >= 0),
+    diagnostics JSONB NOT NULL DEFAULT '[]'::jsonb,
+    sheets_data_as_of TIMESTAMPTZ NOT NULL,
+    db_data_as_of TIMESTAMPTZ NOT NULL,
+    report_fingerprint TEXT NOT NULL
+        CHECK (report_fingerprint ~ '^[0-9a-f]{32}$'),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_dashboard_shadow_reports_date
+    ON dashboard_shadow_reports(business_date, id DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dashboard_shadow_reports_content
+    ON dashboard_shadow_reports(business_date, primary_source, report_fingerprint);
+
+-- Telegram message archive ---------------------------------------------------
+CREATE TABLE IF NOT EXISTS message_archive_chats (
+    id BIGSERIAL PRIMARY KEY,
+    telegram_chat_id BIGINT,
+    desktop_chat_id BIGINT,
+    chat_type TEXT NOT NULL,
+    current_title TEXT NOT NULL,
+    username TEXT,
+    is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    first_message_at TIMESTAMPTZ,
+    last_message_at TIMESTAMPTZ,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_message_archive_chats_telegram
+    ON message_archive_chats(telegram_chat_id) WHERE telegram_chat_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_message_archive_chats_desktop
+    ON message_archive_chats(desktop_chat_id) WHERE desktop_chat_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_message_archive_chats_title
+    ON message_archive_chats(LOWER(current_title));
+
+CREATE TABLE IF NOT EXISTS message_archive_chat_names (
+    id BIGSERIAL PRIMARY KEY,
+    chat_id BIGINT NOT NULL REFERENCES message_archive_chats(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    valid_from TIMESTAMPTZ,
+    valid_to TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (chat_id, normalized_name)
+);
+CREATE INDEX IF NOT EXISTS ix_message_archive_chat_names_normalized
+    ON message_archive_chat_names(normalized_name);
+
+CREATE TABLE IF NOT EXISTS message_archive_authors (
+    id BIGSERIAL PRIMARY KEY,
+    telegram_user_id BIGINT,
+    desktop_source_key TEXT,
+    display_name TEXT NOT NULL,
+    username TEXT,
+    is_bot BOOLEAN NOT NULL DEFAULT FALSE,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_message_archive_authors_telegram
+    ON message_archive_authors(telegram_user_id) WHERE telegram_user_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_message_archive_authors_desktop
+    ON message_archive_authors(desktop_source_key) WHERE desktop_source_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS message_archive_messages (
+    id BIGSERIAL PRIMARY KEY,
+    chat_id BIGINT NOT NULL REFERENCES message_archive_chats(id) ON DELETE CASCADE,
+    telegram_message_id BIGINT NOT NULL,
+    author_id BIGINT REFERENCES message_archive_authors(id) ON DELETE SET NULL,
+    message_type TEXT NOT NULL,
+    direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound', 'imported')),
+    sent_at TIMESTAMPTZ NOT NULL,
+    edited_at TIMESTAMPTZ,
+    reply_to_message_id BIGINT,
+    media_group_id TEXT,
+    text_plain TEXT,
+    text_entities JSONB NOT NULL DEFAULT '[]'::jsonb,
+    forward_info JSONB,
+    raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    source TEXT NOT NULL CHECK (source IN ('bot_api', 'telegram_desktop')),
+    revision_no INTEGER NOT NULL DEFAULT 1,
+    content_hash TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (chat_id, telegram_message_id)
+);
+CREATE INDEX IF NOT EXISTS ix_message_archive_messages_chat_time
+    ON message_archive_messages(chat_id, sent_at, telegram_message_id);
+CREATE INDEX IF NOT EXISTS ix_message_archive_messages_chat_author_time
+    ON message_archive_messages(chat_id, author_id, sent_at);
+
+CREATE TABLE IF NOT EXISTS message_archive_revisions (
+    id BIGSERIAL PRIMARY KEY,
+    message_id BIGINT NOT NULL REFERENCES message_archive_messages(id) ON DELETE CASCADE,
+    revision_no INTEGER NOT NULL,
+    text_plain TEXT,
+    text_entities JSONB NOT NULL DEFAULT '[]'::jsonb,
+    edited_at TIMESTAMPTZ NOT NULL,
+    raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    content_hash TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (message_id, revision_no),
+    UNIQUE (message_id, content_hash)
+);
+
+CREATE TABLE IF NOT EXISTS message_archive_attachments (
+    id BIGSERIAL PRIMARY KEY,
+    message_id BIGINT NOT NULL REFERENCES message_archive_messages(id) ON DELETE CASCADE,
+    attachment_type TEXT NOT NULL,
+    ordinal SMALLINT NOT NULL DEFAULT 0,
+    telegram_file_id TEXT,
+    telegram_file_unique_id TEXT,
+    mime_type TEXT,
+    original_name TEXT,
+    file_size BIGINT,
+    duration_seconds INTEGER,
+    width INTEGER,
+    height INTEGER,
+    storage_key TEXT,
+    sha256 TEXT,
+    download_status TEXT NOT NULL DEFAULT 'skipped'
+        CHECK (download_status IN ('pending', 'ready', 'skipped', 'failed', 'unavailable')),
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    download_attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (message_id, attachment_type, ordinal)
+);
+CREATE INDEX IF NOT EXISTS ix_message_archive_attachments_download
+    ON message_archive_attachments(download_status, id)
+    WHERE download_status IN ('pending', 'failed');
+CREATE INDEX IF NOT EXISTS ix_message_archive_attachments_sha256
+    ON message_archive_attachments(sha256) WHERE sha256 IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS message_archive_imports (
+    id BIGSERIAL PRIMARY KEY,
+    source_path TEXT NOT NULL,
+    source_checksum TEXT,
+    dry_run BOOLEAN NOT NULL,
+    status TEXT NOT NULL,
+    chats_found INTEGER NOT NULL DEFAULT 0,
+    messages_created INTEGER NOT NULL DEFAULT 0,
+    messages_updated INTEGER NOT NULL DEFAULT 0,
+    messages_skipped INTEGER NOT NULL DEFAULT 0,
+    files_missing INTEGER NOT NULL DEFAULT 0,
+    summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+    error TEXT,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS message_archive_exports (
+    id BIGSERIAL PRIMARY KEY,
+    chat_id BIGINT NOT NULL REFERENCES message_archive_chats(id) ON DELETE RESTRICT,
+    requested_by_user_id BIGINT NOT NULL,
+    requested_in_chat_id BIGINT NOT NULL,
+    status TEXT NOT NULL,
+    message_count BIGINT NOT NULL DEFAULT 0,
+    part_count INTEGER NOT NULL DEFAULT 0,
+    total_size BIGINT NOT NULL DEFAULT 0,
+    telegram_result_message_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    error TEXT,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ
+);

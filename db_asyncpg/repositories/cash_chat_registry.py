@@ -45,13 +45,16 @@ class CashChatRegistryRepo(ConnectionBoundRepo):
                     chat_ids,
                 )
                 client_id_by_chat = {int(row["chat_id"]): int(row["id"]) for row in clients}
-                missing_cities = [
-                    binding.city for binding in bindings if binding.chat_id not in client_id_by_chat
+                missing_full_cash_chats = [
+                    binding.city
+                    for binding in bindings
+                    if binding.chat_id not in client_id_by_chat
+                    and binding.cash_currency_codes is None
                 ]
-                if missing_cities:
+                if missing_full_cash_chats:
                     raise DomainStateError(
                         "Configured city cash chats do not have active clients: "
-                        + ", ".join(missing_cities)
+                        + ", ".join(missing_full_cash_chats)
                     )
 
                 active_chat_ids = {
@@ -72,6 +75,9 @@ class CashChatRegistryRepo(ConnectionBoundRepo):
                 inserted = 0
                 reactivated = 0
                 for binding in bindings:
+                    if binding.chat_id not in client_id_by_chat:
+                        # Scoped chats may wait for their first silent /start.
+                        continue
                     client_id = client_id_by_chat[binding.chat_id]
                     existing_rows = await connection.fetch(
                         """
@@ -92,14 +98,18 @@ class CashChatRegistryRepo(ConnectionBoundRepo):
                         await connection.execute(
                             """
                             INSERT INTO cash_chat_registry(
-                                chat_id, client_id, city, location_name
+                                chat_id, client_id, city, location_name,
+                                cash_currency_codes
                             )
-                            VALUES ($1, $2, $3, $4)
+                            VALUES ($1, $2, $3, $4, $5)
                             """,
                             binding.chat_id,
                             client_id,
                             binding.city,
                             binding.location_name,
+                            list(binding.cash_currency_codes)
+                            if binding.cash_currency_codes is not None
+                            else None,
                         )
                         inserted += 1
                         continue
@@ -117,6 +127,7 @@ class CashChatRegistryRepo(ConnectionBoundRepo):
                         UPDATE cash_chat_registry
                         SET city = $2,
                             location_name = $3,
+                            cash_currency_codes = $4,
                             is_active = TRUE,
                             deactivated_at = NULL
                         WHERE id = $1
@@ -124,6 +135,9 @@ class CashChatRegistryRepo(ConnectionBoundRepo):
                         int(existing["id"]),
                         binding.city,
                         binding.location_name,
+                        list(binding.cash_currency_codes)
+                        if binding.cash_currency_codes is not None
+                        else None,
                     )
 
                 return CashChatRegistrySyncResult(

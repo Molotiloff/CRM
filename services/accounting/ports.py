@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Protocol
@@ -18,18 +19,81 @@ from .fulfillment_models import (
     FulfillmentQueueSummary,
     ReorderFulfillment,
 )
+from .import_models import ImportedRecord, ImportRunState
 from .models import (
     CashChatBinding,
     CashChatRegistrySyncResult,
     FirmWalletAddress,
     MainDashboardSnapshot,
+    ManualCashAccount,
+    ManualCashMove,
     MarketQuote,
     PartnerAllocation,
     PartnerPurchaseContext,
     ProfitAccrual,
+    RecordManualCashMove,
+    ReverseManualCashMove,
     WalletFactSnapshot,
     WalletFactSource,
 )
+
+
+class ManualCashRepositoryPort(Protocol):
+    async def snapshot(
+        self, *, limit: int = 20
+    ) -> tuple[tuple[ManualCashAccount, ...], tuple[ManualCashMove, ...]]: ...
+
+    async def record(self, command: RecordManualCashMove) -> ManualCashMove: ...
+
+    async def reverse(self, command: ReverseManualCashMove) -> ManualCashMove: ...
+
+
+class AccountingImportRepositoryPort(Protocol):
+    async def acquire_source_lock(self, source_name: str) -> None: ...
+
+    async def start_or_resume(
+        self, *, source_name: str, manifest_checksum: str, record_count: int,
+        strategy: dict[str, str], control_totals: dict[str, str],
+    ) -> ImportRunState: ...
+
+    async def imported_record(
+        self, *, source_name: str, entity_kind: str, source_key: str,
+    ) -> ImportedRecord | None: ...
+
+    async def record_applied(
+        self, *, run_id: int, source_name: str, entity_kind: str, source_key: str,
+        payload_checksum: str, sequence_no: int, target_table: str, target_id: int,
+    ) -> None: ...
+
+    async def advance_checkpoint(self, run_id: int, *, sequence_no: int) -> None: ...
+
+    async def complete(self, run_id: int) -> None: ...
+
+    async def fail(self, run_id: int, *, error_kind: str) -> None: ...
+
+    async def resolve_client_id(self, chat_id: int) -> int: ...
+
+    async def deal(
+        self, *, deal_type: str, city: str, deal_at: date, profit: Decimal,
+        body: Mapping[str, object], comment: str | None, source_ref: str,
+    ) -> int: ...
+
+    async def cash_registry(self, *, chat_id: int, city: str, location_name: str) -> int: ...
+
+    async def internal_balance(
+        self, *, name: str, kind: str, currency: str, amount: Decimal,
+        idempotency_key: str,
+    ) -> int: ...
+
+    async def capital(
+        self, *, owner: str, amount: Decimal, move_at: date,
+        monthly_rate: Decimal | None, idempotency_key: str,
+    ) -> int: ...
+
+    async def expense(
+        self, *, kind: str, category: str, city: str | None, amount: Decimal,
+        expense_at: date, comment: str | None, idempotency_key: str,
+    ) -> int: ...
 
 
 class MarketQuoteProviderPort(Protocol):
@@ -84,7 +148,7 @@ class ProfitAccrualRepositoryPort(Protocol):
 
     async def append(
         self, *, deal_id: int, qty: Decimal, settlement_status: str,
-        idempotency_key: str,
+        idempotency_key: str, received_at: datetime | None = None,
     ) -> ProfitAccrual: ...
 
     async def list_pending_before(self, boundary: datetime) -> list[ProfitAccrual]: ...

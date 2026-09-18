@@ -25,6 +25,7 @@ class CreateCashRequestParams(CashRequestCommand):
     parsed: ParsedRequest
     creator_name: str = "unknown"
     source_message_id: int | None = None
+    client_group: str | None = None
 
 
 CreateCashRequestResult = CashRequestResult
@@ -47,6 +48,7 @@ class CreateCashRequest(CashRequestUseCaseBase):
             chat_id=params.chat_id,
             chat_name=params.chat_name,
             city=parsed.city,
+            client_group=params.client_group,
         )
         accounts = await self.repo.snapshot_wallet(ctx.client_id)
 

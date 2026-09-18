@@ -29,6 +29,7 @@ class CashSettlementContext:
     city: str
     currency: str
     expected_qty: Decimal
+    track_client_balance: bool
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -40,6 +41,6 @@ class CashSettlementResult:
     currency: str
     actual_qty: Decimal
     cash_transaction_id: int
-    client_transaction_id: int
+    client_transaction_id: int | None
     position_move_id: int | None
     repeated: bool

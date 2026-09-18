@@ -301,17 +301,19 @@ async def test_async_server_adapter_cancels_server_after_shutdown_timeout() -> N
 
 
 def test_runtime_supervises_all_background_components() -> None:
-    components = [RecordingLifecycle(str(index), []) for index in range(5)]
+    components = [RecordingLifecycle(str(index), []) for index in range(6)]
     runtime = BotRuntimeServices(
         daily_balances_scheduler=components[0],
-        aml_queue_service=components[1],  # type: ignore[arg-type]
-        payment_watch_poller=components[2],  # type: ignore[arg-type]
-        tg_outbox_worker=components[3],  # type: ignore[arg-type]
-        market_ws_service=components[4],  # type: ignore[arg-type]
+        best_change_month_report_scheduler=components[1],
+        aml_queue_service=components[2],  # type: ignore[arg-type]
+        payment_watch_poller=components[3],  # type: ignore[arg-type]
+        tg_outbox_worker=components[4],  # type: ignore[arg-type]
+        market_ws_service=components[5],  # type: ignore[arg-type]
     )
 
     assert [component.name for component in runtime._lifecycle_components()] == [
         "Daily balances scheduler",
+        "BestChange month report scheduler",
         "AML queue service",
         "Payment watch poller",
         "Telegram outbox worker",

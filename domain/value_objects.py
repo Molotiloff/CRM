@@ -128,6 +128,8 @@ class SourceKind(StrEnum):
     CASH = "cash"
     FULFILLMENT = "fulfillment"
     PARTNER = "partner"
+    BEST_CHANGE = "best_change"
+    ACCOUNTING_IMPORT = "accounting_import"
 
 
 def _decimal(value: object, *, field: str) -> Decimal:

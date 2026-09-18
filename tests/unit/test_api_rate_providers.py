@@ -51,9 +51,12 @@ class FakeDashboardSheetsGateway:
             9: "228 598₽",
             10: "1 801 307₽",
             11: "-23₽",
+            13: "250 000₽",
             14: "36 833 394₽",
         }.items():
             set_cell(row, 2, value)
+        set_cell(13, 5, "50 000 000₽")
+        set_cell(14, 5, "4%")
         for row, value in {
             1: "43 528 093₽",
             3: "4 404 248₽",
@@ -63,6 +66,7 @@ class FakeDashboardSheetsGateway:
             8: "-429 722₽",
             10: "2 081 592₽",
             11: "2 322 656₽",
+            13: "35 032 087₽",
         }.items():
             set_cell(row, 11, value)
         for column, start_row, values in (
@@ -121,5 +125,10 @@ async def test_gutils_rate_provider_maps_dashboard_snapshot_in_one_read() -> Non
     assert snapshot is not None
     assert snapshot.profit == Decimal("1801307")
     assert snapshot.today_expense == Decimal("3500")
+    assert snapshot.daily_profit == Decimal("250000")
+    assert snapshot.turnover == Decimal("36833394")
+    assert snapshot.monthly_turnover == Decimal("50000000")
+    assert snapshot.profitability == Decimal("0.04")
+    assert snapshot.invested_capital == Decimal("35032087")
     assert snapshot.currencies["USDT"].rate == Decimal("85.28")
     assert snapshot.cities["екб"].profit == Decimal("812518")

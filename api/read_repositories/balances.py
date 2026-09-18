@@ -31,6 +31,11 @@ class BalanceReadRepository(ConnectionBoundRepo):
                       FROM cash_chat_registry cash
                       WHERE cash.client_id = a.client_id
                         AND cash.is_active
+                        AND (
+                            cash.cash_currency_codes IS NULL
+                            OR UPPER(BTRIM(a.currency_code))
+                               = ANY(cash.cash_currency_codes)
+                        )
                   )
                   AND ($1::text IS NULL OR a.currency_code = UPPER($1))
                   AND ($2::text IS NULL

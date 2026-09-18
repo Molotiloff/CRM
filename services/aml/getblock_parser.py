@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import html
 import json
 import re
@@ -9,47 +10,69 @@ from typing import Any
 from bs4 import BeautifulSoup
 
 
-def extract_csrf_from_html(html_text: str) -> str | None:
-    soup = BeautifulSoup(html_text, "html.parser")
+def _dispose_soup(soup: BeautifulSoup) -> None:
+    soup.decompose()
+    # Узлы BeautifulSoup образуют циклы ссылок и иначе удерживают весь HTML до
+    # очередного запуска cyclic GC. AML вызывается редко, поэтому освобождаем DOM
+    # сразу после разбора.
+    gc.collect()
 
-    meta = soup.select_one('meta[name="csrf-token"]')
-    if meta and meta.get("content"):
-        return meta["content"]
 
-    hidden = soup.select_one('input[name="_csrf"]')
-    if hidden and hidden.get("value"):
-        return hidden["value"]
-
-    patterns = [
-        r'csrf-token"\s+content="([^"]+)"',
-        r'name="_csrf"\s+value="([^"]+)"',
-        r'"_csrf"\s*:\s*"([^"]+)"',
-        r"'_csrf'\s*:\s*'([^']+)'",
-    ]
+def _first_regex_group(text: str, patterns: list[str]) -> str | None:
     for pattern in patterns:
-        m = re.search(pattern, html_text, re.I)
-        if m:
-            return m.group(1)
+        match = re.search(pattern, text, re.I)
+        if match:
+            return match.group(1)
+    return None
+
+
+def extract_csrf_from_html(html_text: str) -> str | None:
+    token = _first_regex_group(
+        html_text,
+        [
+            r'csrf-token"\s+content="([^"]+)"',
+            r'name="_csrf"\s+value="([^"]+)"',
+            r'"_csrf"\s*:\s*"([^"]+)"',
+            r"'_csrf'\s*:\s*'([^']+)'",
+        ],
+    )
+    if token:
+        return token
+
+    soup = BeautifulSoup(html_text, "html.parser")
+    try:
+        meta = soup.select_one('meta[name="csrf-token"]')
+        if meta and meta.get("content"):
+            return str(meta["content"])
+
+        hidden = soup.select_one('input[name="_csrf"]')
+        if hidden and hidden.get("value"):
+            return str(hidden["value"])
+    finally:
+        _dispose_soup(soup)
 
     return None
 
 
 def find_hidden_csrf_field(html_text: str) -> str | None:
+    token = _first_regex_group(
+        html_text,
+        [
+            r'name="_csrf"\s+value="([^"]+)"',
+            r'name="[^"]*csrf[^"]*"\s+value="([^"]+)"',
+        ],
+    )
+    if token:
+        return token
+
     soup = BeautifulSoup(html_text, "html.parser")
-
-    for selector in ('input[name="_csrf"]', 'input[name="csrf"]', 'input[name*="csrf"]'):
-        hidden = soup.select_one(selector)
-        if hidden and hidden.get("value"):
-            return hidden["value"]
-
-    patterns = [
-        r'name="_csrf"\s+value="([^"]+)"',
-        r'name="[^"]*csrf[^"]*"\s+value="([^"]+)"',
-    ]
-    for pattern in patterns:
-        m = re.search(pattern, html_text, re.I)
-        if m:
-            return m.group(1)
+    try:
+        for selector in ('input[name="_csrf"]', 'input[name="csrf"]', 'input[name*="csrf"]'):
+            hidden = soup.select_one(selector)
+            if hidden and hidden.get("value"):
+                return str(hidden["value"])
+    finally:
+        _dispose_soup(soup)
 
     return None
 
@@ -203,6 +226,26 @@ def parse_report_preview(
     preview_html: str, amlcheckup: str, *, base_url: str, lang: str
 ) -> dict[str, Any]:
     soup = BeautifulSoup(preview_html, "html.parser")
+    try:
+        return _parse_report_preview_soup(
+            soup,
+            preview_html,
+            amlcheckup,
+            base_url=base_url,
+            lang=lang,
+        )
+    finally:
+        _dispose_soup(soup)
+
+
+def _parse_report_preview_soup(
+    soup: BeautifulSoup,
+    preview_html: str,
+    amlcheckup: str,
+    *,
+    base_url: str,
+    lang: str,
+) -> dict[str, Any]:
 
     info_block = soup.select_one("#report-info, .report-info")
     text = str(info_block) if info_block else preview_html

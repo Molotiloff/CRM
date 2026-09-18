@@ -22,6 +22,7 @@ class DealType(StrEnum):
     YUAN = "yuan"
     INVOICE = "invoice"
     PROFIT = "profit"
+    BEST_CHANGE = "best_change"
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +145,10 @@ class Deal:
     deal_at: date | None = None
     payment_watch_id: int | None = None
     payment_watch_status: str | None = None
+    corrected_from_deal_id: int | None = None
+    corrected_to_deal_id: int | None = None
+    correction_reason: str | None = None
+    correction_actor_name: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     legs: tuple[DealLeg, ...] = ()
@@ -240,6 +245,18 @@ class Deal:
             ),
             payment_watch_status=_optional_text(
                 record.get("payment_watch_status")
+            ),
+            corrected_from_deal_id=_optional_int(
+                record.get("corrected_from_deal_id"),
+                "original corrected deal id",
+            ),
+            corrected_to_deal_id=_optional_int(
+                record.get("corrected_to_deal_id"),
+                "replacement corrected deal id",
+            ),
+            correction_reason=_optional_text(record.get("correction_reason")),
+            correction_actor_name=_optional_text(
+                record.get("correction_actor_name")
             ),
             created_at=_optional_datetime(record.get("created_at")),
             updated_at=_optional_datetime(record.get("updated_at")),

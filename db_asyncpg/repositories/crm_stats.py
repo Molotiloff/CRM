@@ -204,21 +204,33 @@ class CrmStatsRepo(ConnectionBoundRepo):
                        FROM cash_chat_registry cash
                        JOIN client_accounts account ON account.client_id = cash.client_id
                       WHERE cash.is_active AND account.is_active
-                        AND UPPER(BTRIM(account.currency_code)) = 'RUB')    AS rub_cash,
+                        AND UPPER(BTRIM(account.currency_code)) = 'RUB'
+                        AND (
+                            cash.cash_currency_codes IS NULL
+                            OR 'RUB' = ANY(cash.cash_currency_codes)
+                        ))                                                  AS rub_cash,
                     (SELECT COALESCE(SUM(p.rub_cost_after), 0) FROM (
                          SELECT DISTINCT ON (currency_code) rub_cost_after
                          FROM firm_position_moves
                          ORDER BY currency_code, id DESC
                      ) p)                                                   AS rub_in_currency,
-                    (SELECT COALESCE(SUM(balance), 0) FROM client_accounts
-                      WHERE is_active AND upper(currency_code) = 'RUB'
+                    (SELECT COALESCE(SUM(account.balance), 0)
+                       FROM client_accounts account
+                       JOIN clients client ON client.id = account.client_id
+                      WHERE account.is_active AND upper(account.currency_code) = 'RUB'
+                        AND COALESCE(client.client_group, '') <> 'internal_wallet'
                         AND NOT EXISTS (
                             SELECT 1 FROM cash_chat_registry cash
-                            WHERE cash.client_id = client_accounts.client_id
+                            WHERE cash.client_id = account.client_id
                               AND cash.is_active
+                              AND (
+                                  cash.cash_currency_codes IS NULL
+                                  OR UPPER(BTRIM(account.currency_code))
+                                     = ANY(cash.cash_currency_codes)
+                              )
                         ))                                                  AS client_rub,
                     (SELECT COALESCE(SUM(balance), 0) FROM internal_accounts
-                      WHERE is_active)                                      AS internal_rub,
+                      WHERE is_active AND currency_code = 'RUB')            AS internal_rub,
                     (SELECT COALESCE(SUM(amount), 0) FROM capital_moves)    AS capital_invested,
                     (SELECT COALESCE(SUM(profit), 0) FROM deals
                       WHERE status = 'done')                                AS deals_profit_total,
@@ -232,15 +244,29 @@ class CrmStatsRepo(ConnectionBoundRepo):
         async with self._connection() as con:
             rows = await con.fetch(
                 """
-                SELECT upper(currency_code) AS currency_code,
-                       COALESCE(SUM(balance), 0) AS total
-                FROM client_accounts
-                WHERE is_active
-                  AND NOT EXISTS (
-                      SELECT 1 FROM cash_chat_registry cash
-                      WHERE cash.client_id = client_accounts.client_id
-                        AND cash.is_active
-                  )
+                WITH balances AS (
+                    SELECT upper(account.currency_code) AS currency_code, account.balance
+                    FROM client_accounts account
+                    JOIN clients client ON client.id = account.client_id
+                    WHERE account.is_active
+                      AND COALESCE(client.client_group, '') <> 'internal_wallet'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM cash_chat_registry cash
+                          WHERE cash.client_id = account.client_id
+                            AND cash.is_active
+                            AND (
+                                cash.cash_currency_codes IS NULL
+                                OR UPPER(BTRIM(account.currency_code))
+                                   = ANY(cash.cash_currency_codes)
+                            )
+                      )
+                    UNION ALL
+                    SELECT currency_code, balance
+                    FROM internal_accounts
+                    WHERE is_active AND currency_code <> 'RUB'
+                )
+                SELECT currency_code, COALESCE(SUM(balance), 0) AS total
+                FROM balances
                 GROUP BY 1
                 """
             )
@@ -258,6 +284,11 @@ class CrmStatsRepo(ConnectionBoundRepo):
                 FROM cash_chat_registry cash
                 JOIN client_accounts account ON account.client_id = cash.client_id
                 WHERE cash.is_active AND account.is_active
+                  AND (
+                      cash.cash_currency_codes IS NULL
+                      OR UPPER(BTRIM(account.currency_code))
+                         = ANY(cash.cash_currency_codes)
+                  )
                 ORDER BY cash.city, cash.location_name, currency_code
                 """
             )

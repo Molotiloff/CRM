@@ -527,6 +527,7 @@ def test_background_service_packages_expose_only_consumed_entry_points() -> None
     assert _package_exports(SERVICES_ROOT / "aml" / "__init__.py") == {
         "AMLQueueService",
         "AMLQueueTask",
+        "AMLQueueFullError",
         "AMLService",
         "ThreadedAMLChecker",
     }
@@ -634,8 +635,9 @@ def test_domain_and_transport_packages_expose_only_cross_context_types() -> None
         "AcceptShortHandler",
         "ActHandler",
         "AdminRequestHandler",
-        "BroadcastAllHandler",
-        "CalcHandler",
+            "BroadcastAllHandler",
+            "BestChangeHandler",
+            "CalcHandler",
         "CashRequestsHandler",
         "CityAssignHandler",
         "ClientsBalancesHandler",

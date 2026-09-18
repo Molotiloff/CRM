@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 @dataclass(slots=True)
 class BotRuntimeServices:
     daily_balances_scheduler: AsyncLifecycle | None = None
+    best_change_month_report_scheduler: AsyncLifecycle | None = None
     profit_capitalization_scheduler: AsyncLifecycle | None = None
     market_ws_service: RapiraWsService | None = None
     orderbook_service: OrderbookService | None = None
@@ -29,6 +30,7 @@ class BotRuntimeServices:
     aml_queue_service: AMLQueueService | None = None
     payment_watch_poller: PaymentWatchPoller | None = None
     tg_outbox_worker: TgOutboxWorker | None = None
+    message_archive: AsyncLifecycle | None = None
     _supervisor: LifecycleSupervisor | None = field(default=None, init=False)
 
     async def start(self, *, bot: Bot, config: Config) -> None:
@@ -60,10 +62,15 @@ class BotRuntimeServices:
     def _lifecycle_components(self) -> tuple[LifecycleComponent, ...]:
         candidates: tuple[tuple[str, AsyncLifecycle | None], ...] = (
             ("Daily balances scheduler", self.daily_balances_scheduler),
+            (
+                "BestChange month report scheduler",
+                self.best_change_month_report_scheduler,
+            ),
             ("Profit capitalization scheduler", self.profit_capitalization_scheduler),
             ("AML queue service", self.aml_queue_service),
             ("Payment watch poller", self.payment_watch_poller),
             ("Telegram outbox worker", self.tg_outbox_worker),
+            ("Message archive", self.message_archive),
             ("Rapira websocket service", self.market_ws_service),
         )
         return tuple(

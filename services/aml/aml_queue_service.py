@@ -12,6 +12,10 @@ from services.lifecycle import ManagedTaskLifecycle
 log = logging.getLogger("aml_queue")
 
 
+class AMLQueueFullError(RuntimeError):
+    pass
+
+
 @dataclass(slots=True)
 class AMLQueueTask:
     wallet: str
@@ -25,15 +29,21 @@ class AMLQueueService(ManagedTaskLifecycle):
         *,
         checker: AsyncAMLChecker,
         metrics: MetricsRecorder = NULL_METRICS,
+        max_queue_size: int = 20,
     ) -> None:
         super().__init__(task_name="aml_queue_worker")
         self._checker = checker
-        self._queue: asyncio.Queue[AMLQueueTask] = asyncio.Queue()
+        self._queue: asyncio.Queue[AMLQueueTask] = asyncio.Queue(
+            maxsize=max(1, max_queue_size)
+        )
         self._metrics = metrics
         self._metrics.set_queue_size("aml.pending", 0)
 
     async def enqueue(self, task: AMLQueueTask) -> int:
-        await self._queue.put(task)
+        try:
+            self._queue.put_nowait(task)
+        except asyncio.QueueFull as exc:
+            raise AMLQueueFullError("Очередь AML-проверок заполнена") from exc
         size = self._queue.qsize()
         self._metrics.set_queue_size("aml.pending", size)
         return size

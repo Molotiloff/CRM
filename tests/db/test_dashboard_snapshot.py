@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
 
 from api.read_repositories.dashboard import DashboardReadRepository
+from db_asyncpg.repositories.shadow_comparisons import ShadowComparisonsRepo
+from services.accounting.dashboard_comparison_service import DashboardComparisonService
 
 
 @pytest.mark.asyncio
@@ -20,6 +24,13 @@ async def test_dashboard_snapshot_uses_canonical_postgres_sources_and_formulas(p
         client = await connection.fetchval(
             "INSERT INTO clients(chat_id, name) VALUES (-402, 'Клиент') RETURNING id"
         )
+        internal_wallet = await connection.fetchval(
+            """
+            INSERT INTO clients(chat_id, name, client_group)
+            VALUES (-403, 'Операционный кошелек', 'internal_wallet')
+            RETURNING id
+            """
+        )
         await connection.execute(
             """
             INSERT INTO client_accounts(client_id, currency_code, precision, balance)
@@ -28,6 +39,13 @@ async def test_dashboard_snapshot_uses_canonical_postgres_sources_and_formulas(p
             """,
             cash_client,
             client,
+        )
+        await connection.execute(
+            """
+            INSERT INTO client_accounts(client_id, currency_code, precision, balance)
+            VALUES ($1, 'RUB', 2, 999), ($1, 'USDT', 8, 777)
+            """,
+            internal_wallet,
         )
         await connection.execute(
             """
@@ -49,7 +67,11 @@ async def test_dashboard_snapshot_uses_canonical_postgres_sources_and_formulas(p
             """
         )
         await connection.execute(
-            "INSERT INTO internal_accounts(name, balance) VALUES ('Внутренний', -100)"
+            """
+            INSERT INTO internal_accounts(name, currency_code, balance)
+            VALUES ('Внутренний', 'RUB', -100),
+                   ('USDT legacy adjustment', 'USDT', 7)
+            """
         )
         owner_id = await connection.fetchval(
             "INSERT INTO capital_owners(name) VALUES ('Владелец') RETURNING id"
@@ -70,7 +92,7 @@ async def test_dashboard_snapshot_uses_canonical_postgres_sources_and_formulas(p
             """
             INSERT INTO deals(deal_type, city, status, source, profit, deal_at, body)
             VALUES ('sale', 'екб', 'done', 'import', 300, $1,
-                    '{"sale_amount": "10000"}'::jsonb)
+                    '{"sale_amount": "10000", "rub_cost": "9000"}'::jsonb)
             RETURNING id
             """,
             business_date,
@@ -139,13 +161,13 @@ async def test_dashboard_snapshot_uses_canonical_postgres_sources_and_formulas(p
         Decimal("8000.00000000"),
     )
     assert (usdt.client_qty, usdt.deal_profit_qty, usdt.fact_qty) == (
-        Decimal("10.00000000"),
+        Decimal("17.00000000"),
         Decimal("5.00000000"),
-        Decimal("115.00000000"),
+        Decimal("122.00000000"),
     )
     assert (usdt.observed_qty, usdt.gap) == (
         Decimal("120.00000000"),
-        Decimal("5.00000000"),
+        Decimal("-2.00000000"),
     )
     reconciliation = snapshot.reconciliation
     assert reconciliation.rub_cash == Decimal("1000.00000000")
@@ -158,8 +180,8 @@ async def test_dashboard_snapshot_uses_canonical_postgres_sources_and_formulas(p
     assert reconciliation.fact_rub == Decimal("13200.00000000")
     assert snapshot.periods.daily_profit == Decimal("250.00000000")
     assert snapshot.periods.daily_turnover == Decimal("10000")
-    assert snapshot.periods.monthly_turnover == Decimal("10000")
-    assert snapshot.periods.profitability == Decimal("0.03")
+    assert snapshot.periods.monthly_turnover == Decimal("9000")
+    assert snapshot.periods.profitability == Decimal(300) / Decimal(9000)
     assert snapshot.cities[0].profit == Decimal("250.00000000")
     assert snapshot.operations.active_requests == 2
     assert snapshot.operations.clients_with_balance == 1
@@ -169,6 +191,171 @@ async def test_dashboard_snapshot_uses_canonical_postgres_sources_and_formulas(p
         "Client FX balances are excluded from RUB valuation (stored_rub_only)",
         "USDT physical balance is stale",
     )
+
+
+@pytest.mark.asyncio
+async def test_dashboard_snapshot_normalizes_city_aliases(pool) -> None:
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            INSERT INTO expenses(kind, category, city, amount, expense_at)
+            VALUES ('variable', 'One', 'тюм', 10, '2026-08-26'),
+                   ('variable', 'Two', 'Тюмень', 20, '2026-08-26');
+            INSERT INTO deals(deal_type, city, status, source, profit, deal_at)
+            VALUES ('profit', 'Москва', 'done', 'import', 30, '2026-08-26'),
+                   ('profit', 'мск', 'done', 'import', 40, '2026-08-26');
+            """
+        )
+
+    snapshot = await DashboardReadRepository(pool).get_snapshot(
+        business_date=date(2026, 8, 26)
+    )
+    cities = {item.city: item for item in snapshot.cities}
+
+    assert cities["тюм"].expense == Decimal("30.00000000")
+    assert cities["мск"].income == Decimal("70.00000000")
+    assert "тюмень" not in cities
+    assert "москва" not in cities
+
+
+@pytest.mark.asyncio
+async def test_dashboard_includes_only_manual_moscow_cash_accounts(pool) -> None:
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """
+            INSERT INTO cash_desks(city, name, currency_code, balance)
+            VALUES ('мск', 'Поэты', 'RUB', -57565),
+                   ('мск', 'BS', 'RUB', 82408),
+                   ('legacy', 'ignored', 'RUB', 999999)
+            """
+        )
+
+    snapshot = await DashboardReadRepository(pool).get_snapshot(
+        business_date=date(2026, 8, 26)
+    )
+
+    assert snapshot.reconciliation.rub_cash == Decimal("24843.00000000")
+
+
+@pytest.mark.asyncio
+async def test_shadow_comparison_report_is_persisted_with_diagnostics(pool) -> None:
+    business_date = date(2026, 8, 26)
+    database = await DashboardReadRepository(pool).get_snapshot(
+        business_date=business_date
+    )
+    sheets = replace(
+        database,
+        source="sheets",
+        warnings=(),
+        reconciliation=replace(
+            database.reconciliation,
+            total_rub=database.reconciliation.total_rub + Decimal("10"),
+        ),
+    )
+    report = DashboardComparisonService().compare(sheets=sheets, database=database)
+
+    report_id = await ShadowComparisonsRepo(pool).save(
+        business_date=business_date,
+        primary_source="sheets",
+        report=report,
+    )
+
+    async with pool.acquire() as connection:
+        row = await connection.fetchrow(
+            """
+            SELECT status, mismatch_count, diagnostics
+            FROM dashboard_shadow_reports WHERE id = $1
+            """,
+            report_id,
+        )
+    assert row["status"] == "mismatched"
+    assert row["mismatch_count"] >= 1
+    diagnostics = json.loads(row["diagnostics"])
+    assert any(item["path"] == "reconciliation.total_rub" for item in diagnostics)
+
+    stored = await ShadowComparisonsRepo(pool).get(report_id)
+    assert stored is not None
+    assert stored.id == report_id
+    assert stored.business_date == business_date
+    assert any(
+        item.path == "reconciliation.total_rub"
+        and item.sheet_value == database.reconciliation.total_rub + Decimal("10")
+        and item.db_value == database.reconciliation.total_rub
+        for item in stored.differences
+    )
+
+
+@pytest.mark.asyncio
+async def test_identical_shadow_comparison_reuses_persisted_report(pool) -> None:
+    business_date = date(2026, 8, 26)
+    database = await DashboardReadRepository(pool).get_snapshot(
+        business_date=business_date
+    )
+    sheets = replace(database, source="sheets", warnings=())
+    report = DashboardComparisonService().compare(sheets=sheets, database=database)
+    repository = ShadowComparisonsRepo(pool)
+
+    first_id = await repository.save(
+        business_date=business_date,
+        primary_source="sheets",
+        report=report,
+    )
+    second_id = await repository.save(
+        business_date=business_date,
+        primary_source="sheets",
+        report=report,
+    )
+
+    assert second_id == first_id
+    async with pool.acquire() as connection:
+        count = await connection.fetchval(
+            "SELECT COUNT(*) FROM dashboard_shadow_reports"
+        )
+        fingerprint = await connection.fetchval(
+            "SELECT report_fingerprint FROM dashboard_shadow_reports WHERE id = $1",
+            first_id,
+        )
+    assert count == 1
+    assert len(fingerprint) == 32
+
+
+@pytest.mark.asyncio
+async def test_changed_shadow_comparison_creates_new_report(pool) -> None:
+    business_date = date(2026, 8, 26)
+    database = await DashboardReadRepository(pool).get_snapshot(
+        business_date=business_date
+    )
+    repository = ShadowComparisonsRepo(pool)
+    first = DashboardComparisonService().compare(
+        sheets=replace(database, source="sheets", warnings=()),
+        database=database,
+    )
+    changed_sheets = replace(
+        database,
+        source="sheets",
+        warnings=(),
+        reconciliation=replace(
+            database.reconciliation,
+            total_rub=database.reconciliation.total_rub + Decimal("1"),
+        ),
+    )
+    changed = DashboardComparisonService().compare(
+        sheets=changed_sheets,
+        database=database,
+    )
+
+    first_id = await repository.save(
+        business_date=business_date,
+        primary_source="sheets",
+        report=first,
+    )
+    changed_id = await repository.save(
+        business_date=business_date,
+        primary_source="sheets",
+        report=changed,
+    )
+
+    assert changed_id != first_id
 
 
 class PausingDashboardReadRepository(DashboardReadRepository):

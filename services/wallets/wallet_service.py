@@ -114,6 +114,25 @@ class WalletService:
             idempotency_key=idempotency_key,
         )
 
+    async def withdraw_all(
+        self,
+        *,
+        chat_id: int,
+        chat_name: str,
+        code: str,
+        comment: str,
+        source: str,
+        idempotency_key: str,
+    ) -> WalletCommandResult:
+        return await self.mutation_service.withdraw_all(
+            chat_id=chat_id,
+            chat_name=chat_name,
+            code=code,
+            comment=comment,
+            source=source,
+            idempotency_key=idempotency_key,
+        )
+
     async def remove_currency_confirmed(
         self,
         *,

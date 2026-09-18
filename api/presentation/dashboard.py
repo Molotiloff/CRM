@@ -10,6 +10,7 @@ from api.schemas.dashboard import (
     DashboardDailyIndicatorDto,
     DashboardFinanceIndicatorDto,
     DashboardResponse,
+    DashboardShadowComparisonDto,
     DashboardSystemMetricDto,
     DashboardTopMetricDto,
 )
@@ -20,6 +21,7 @@ def build_dashboard(
     *,
     snapshot: MainDashboardSnapshot,
     today: date,
+    shadow_comparison: DashboardShadowComparisonDto | None = None,
 ) -> DashboardResponse:
     reconciliation = snapshot.reconciliation
     periods = snapshot.periods
@@ -29,6 +31,7 @@ def build_dashboard(
         calculatedAt=snapshot.calculated_at,
         dataAsOf=snapshot.data_as_of,
         warnings=list(snapshot.warnings),
+        shadowComparison=shadow_comparison,
         dateLabel=today.strftime("%d.%m.%Y"),
         weekdayLabel=_weekday_label(today),
         cities=["Все города", *(_city_title(item.city) for item in snapshot.cities)],
@@ -37,8 +40,8 @@ def build_dashboard(
                 id="fact-turnover",
                 title="Факт. оборот",
                 value=_format_rub(reconciliation.fact_turnover),
-                subtitleLabel="Клиентские балансы",
-                subtitleValue=_format_rub(reconciliation.client_balances),
+                subtitleLabel="Общие балансы",
+                subtitleValue=_format_rub(reconciliation.total_balances),
                 tone="blue",
                 icon="reports",
             ),
@@ -119,21 +122,17 @@ def build_dashboard(
         ],
         finance=[
             DashboardFinanceIndicatorDto(
-                id="total-rub", label="Общий RUB", value=_format_rub(reconciliation.total_rub)
-            ),
-            DashboardFinanceIndicatorDto(
-                id="total-balances",
-                label="Общий балансы",
-                value=_format_rub(reconciliation.total_balances),
-                isNegative=reconciliation.total_balances < 0,
-            ),
-            DashboardFinanceIndicatorDto(
-                id="fact-rub", label="Факт RUB", value=_format_rub(reconciliation.fact_rub)
+                id="rub-cash",
+                label="RUB в кассах",
+                value=_format_rub(reconciliation.rub_cash),
             ),
             DashboardFinanceIndicatorDto(
                 id="rub-in-currency",
                 label="RUB в валюте",
                 value=_format_rub(reconciliation.rub_in_currency),
+            ),
+            DashboardFinanceIndicatorDto(
+                id="total-rub", label="Общий RUB", value=_format_rub(reconciliation.total_rub)
             ),
             DashboardFinanceIndicatorDto(
                 id="client-balances",
@@ -145,6 +144,43 @@ def build_dashboard(
                 id="skyex-balances",
                 label="Балансы SkyEx",
                 value=_format_rub(reconciliation.skyex_balances),
+                isNegative=reconciliation.skyex_balances < 0,
+            ),
+            DashboardFinanceIndicatorDto(
+                id="total-balances",
+                label="Общие балансы",
+                value=_format_rub(reconciliation.total_balances),
+                isNegative=reconciliation.total_balances < 0,
+            ),
+            DashboardFinanceIndicatorDto(
+                id="fact-turnover",
+                label="Фактический оборот",
+                value=_format_rub(reconciliation.fact_turnover),
+            ),
+            DashboardFinanceIndicatorDto(
+                id="invested-capital",
+                label="Вложенный капитал",
+                value=_format_rub(reconciliation.invested_capital),
+            ),
+            DashboardFinanceIndicatorDto(
+                id="accumulated-profit",
+                label="Накопленная прибыль",
+                value=_format_rub(reconciliation.accumulated_profit),
+                isNegative=reconciliation.accumulated_profit < 0,
+            ),
+            DashboardFinanceIndicatorDto(
+                id="turnover",
+                label="Расчётный оборот",
+                value=_format_rub(reconciliation.turnover),
+            ),
+            DashboardFinanceIndicatorDto(
+                id="gap",
+                label="Разрыв",
+                value=_format_rub(reconciliation.gap),
+                isNegative=reconciliation.gap < 0,
+            ),
+            DashboardFinanceIndicatorDto(
+                id="fact-rub", label="Факт RUB", value=_format_rub(reconciliation.fact_rub)
             ),
         ],
         citySummaries=[

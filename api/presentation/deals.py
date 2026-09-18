@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 from api.schemas.deals import (
+    BestChangeDetailsDto,
     DealDetailsResponse,
     DealItemDto,
     DealLegDto,
@@ -45,6 +46,7 @@ def build_deal_details(row: Deal) -> DealDetailsResponse:
         dealNo=str(row.deal_no),
         createdAt=_iso(row.created_at),
         updatedAt=_iso(row.updated_at),
+        dealAt=row.deal_at.isoformat() if row.deal_at is not None else None,
         source="sheets" if row.source == "import" else str(row.source),
         sourceKind=str(row.source_kind) if row.source_kind else None,
         counterpartyName=row.counterparty_name,
@@ -55,6 +57,7 @@ def build_deal_details(row: Deal) -> DealDetailsResponse:
         paymentWatchId=(str(row.payment_watch_id) if row.payment_watch_id is not None else None),
         paymentWatchStatus=row.payment_watch_status,
         body=row.body.to_dict(),
+        bestChange=_best_change_details(row),
         legs=[
             DealLegDto(
                 id=str(leg.id),
@@ -83,15 +86,18 @@ def build_deal_details(row: Deal) -> DealDetailsResponse:
 
 def _deal_item(row: Deal) -> DealItemDto:
     body = row.body.to_dict()
-    client_name = row.client_name or "Без клиента"
+    client_name = row.client_name or (
+        "BestChange" if str(row.deal_type) == "best_change" else "Без клиента"
+    )
     status = DealStatus(str(row.status))
     return DealItemDto(
         id=str(row.id),
         clientName=client_name,
         clientShortName=_short_name(client_name),
         dealType=_deal_type_label(str(row.deal_type)),
-        asset=_deal_asset(body),
-        amountRub=_deal_amount_rub(body),
+        asset=_deal_asset(str(row.deal_type), body),
+        direction=_deal_direction(str(row.deal_type), body),
+        amountRub=_deal_amount_rub(str(row.deal_type), body),
         city=str(row.city),
         status=status,
         insufficientUsdt=bool(body.get("insufficient_usdt")) or None,
@@ -108,6 +114,7 @@ def _deal_type_label(deal_type: str) -> str:
     return {
         "sale": "Продажа",
         "purchase": "Покупка",
+        "best_change": "BestChange",
         "deposit": "Внесение",
         "withdrawal": "Выдача",
         "delivery": "Доставка",
@@ -119,7 +126,9 @@ def _deal_type_label(deal_type: str) -> str:
     }.get(deal_type, deal_type)
 
 
-def _deal_asset(body: Mapping[str, Any]) -> str:
+def _deal_asset(deal_type: str, body: Mapping[str, Any]) -> str:
+    if deal_type == "best_change":
+        return "USDT"
     for key in ("currency", "asset", "from_currency", "fromCurrency"):
         value = str(body.get(key) or "").strip()
         if value:
@@ -127,7 +136,12 @@ def _deal_asset(body: Mapping[str, Any]) -> str:
     return "RUB"
 
 
-def _deal_amount_rub(body: Mapping[str, Any]) -> float:
+def _deal_amount_rub(deal_type: str, body: Mapping[str, Any]) -> float:
+    if deal_type == "best_change":
+        qty = _body_decimal(body, "qty_usdt")
+        client_rate = _body_decimal(body, "client_rate_rub")
+        if qty is not None and client_rate is not None:
+            return float_value(qty * client_rate)
     for key in (
         "rub_amount",
         "amount_rub",
@@ -144,6 +158,61 @@ def _deal_amount_rub(body: Mapping[str, Any]) -> float:
             except (ArithmeticError, ValueError):
                 continue
     return 0.0
+
+
+def _deal_direction(deal_type: str, body: Mapping[str, Any]) -> str:
+    if deal_type == "best_change":
+        return {
+            "purchase": "RUB → USDT",
+            "sale": "USDT → RUB",
+        }.get(str(body.get("operation_kind")), "—")
+    return f"{_deal_asset(deal_type, body)} → RUB"
+
+
+def _best_change_details(row: Deal) -> BestChangeDetailsDto | None:
+    if str(row.deal_type) != "best_change":
+        return None
+    body = row.body.to_dict()
+    return BestChangeDetailsDto(
+        operation=str(body.get("operation_kind") or "unknown"),
+        qtyUsdt=_body_float(body, "qty_usdt"),
+        marketRateRub=_body_float(body, "market_rate_rub"),
+        clientRateRub=_body_float(body, "client_rate_rub"),
+        unitSpreadRub=_body_float(body, "unit_spread_rub"),
+        grossSpreadRub=_body_float(body, "gross_spread_rub"),
+        profitPoolRub=_body_float(body, "profit_pool_rub"),
+        partnerShareRub=_body_float(body, "partner_share_rub"),
+        skyexProfitRub=_body_float(body, "skyex_profit_rub"),
+        platformFeeUsdt=_body_float(body, "platform_fee_usdt"),
+        originalDealId=(
+            str(row.corrected_from_deal_id)
+            if row.corrected_from_deal_id is not None
+            else None
+        ),
+        replacementDealId=(
+            str(row.corrected_to_deal_id)
+            if row.corrected_to_deal_id is not None
+            else None
+        ),
+        correctionReason=row.correction_reason,
+        correctionActor=row.correction_actor_name,
+    )
+
+
+def _body_float(body: Mapping[str, Any], key: str) -> float | None:
+    value = _body_decimal(body, key)
+    return float_value(value) if value is not None else None
+
+
+def _body_decimal(body: Mapping[str, Any], key: str) -> Decimal | None:
+    value = body.get(key)
+    if value is None:
+        return None
+    try:
+        parsed = Decimal(str(value))
+    except (ArithmeticError, ValueError):
+        return None
+    return parsed if parsed.is_finite() else None
 
 
 def _short_name(name: str) -> str:

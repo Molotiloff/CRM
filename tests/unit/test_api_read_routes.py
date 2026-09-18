@@ -20,7 +20,12 @@ from api.routers import balances, clients, dashboard
 from api.schemas.balances import BalancesSnapshotResponse
 from api.schemas.clients import ClientDto, ClientsPageResponse, ClientTransactionsResponse
 from api.schemas.common import ErrorResponse
-from api.schemas.dashboard import DashboardResponse
+from api.schemas.dashboard import DashboardResponse, DashboardShadowReportDto
+from services.accounting.dashboard_comparison_service import (
+    DashboardDifference,
+    DifferenceKind,
+    StoredDashboardComparisonReport,
+)
 from services.accounting.models import (
     MainDashboardCity,
     MainDashboardCurrency,
@@ -98,6 +103,26 @@ class FailingDashboardRepository:
 class FakeSheetProvider:
     async def get_snapshot(self, *, today: date) -> DashboardSheetSnapshot:
         return _sheet_snapshot()
+
+
+class MissingSheetProvider:
+    async def get_snapshot(self, *, today: date):
+        return None
+
+
+class CapturingComparisonRepository:
+    def __init__(self, report: StoredDashboardComparisonReport | None = None) -> None:
+        self.reports = []
+        self.report = report
+
+    async def save(self, **kwargs) -> int:
+        self.reports.append(kwargs)
+        return 77
+
+    async def get(self, report_id: int) -> StoredDashboardComparisonReport | None:
+        if self.report is not None and self.report.id == report_id:
+            return self.report
+        return None
 
 
 def test_clients_route_returns_frontend_page_dto() -> None:
@@ -191,6 +216,31 @@ def test_dashboard_rates_route_returns_numeric_rates() -> None:
     assert rates == {"RUB": 1.0, "USDT": 81.0}
 
 
+def test_dashboard_shadow_report_returns_accountant_diagnostics() -> None:
+    app = _app()
+    app.state.dashboard_queries = DashboardQueryService(
+        dashboard_repository=FakeReadRepository(),
+        rate_provider=FakeRateProvider(),
+        comparison_repository=CapturingComparisonRepository(_stored_shadow_report()),
+    )
+
+    response = TestClient(app).get("/api/v1/dashboard/shadow-reports/77")
+
+    assert response.status_code == 200
+    report = DashboardShadowReportDto.model_validate(response.json())
+    assert report.primarySource == "postgres"
+    assert report.differences[0].path == "reconciliation.total_rub"
+    assert report.differences[0].sheet == "100"
+    assert report.differences[0].database == "110"
+
+
+def test_dashboard_shadow_report_returns_not_found() -> None:
+    response = TestClient(_app()).get("/api/v1/dashboard/shadow-reports/404")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Dashboard shadow report 404 not found"
+
+
 def test_dashboard_route_rejects_manager_statistics_access() -> None:
     client = TestClient(_app(role=UserRole.manager))
 
@@ -228,9 +278,73 @@ def test_dashboard_sheets_mode_does_not_mix_postgres_metrics() -> None:
     data = response.json()
     assert data["source"] == "sheets"
     assert data["topMetrics"][2]["value"] == "—"
+    assert data["dailyIndicators"][0]["value"] == "250 ₽"
+    assert data["dailyIndicators"][1]["value"] == "50 ₽"
+    assert data["dailyIndicators"][2]["value"] == "200 ₽"
     assert data["warnings"] == [
+        "Client balances and FX client amounts are manually maintained in Sheets",
         "Operational PostgreSQL metrics are unavailable in sheets mode"
     ]
+
+
+def test_dashboard_shadow_returns_sheets_and_persists_aggregate_comparison() -> None:
+    reports = CapturingComparisonRepository()
+    app = _app()
+    app.state.dashboard_queries = DashboardQueryService(
+        dashboard_repository=FakeReadRepository(),
+        rate_provider=FakeRateProvider(),
+        sheet_provider=FakeSheetProvider(),
+        source_mode="db_shadow",
+        comparison_repository=reports,
+    )
+
+    response = TestClient(app).get("/api/v1/dashboard")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "sheets"
+    assert data["shadowComparison"]["status"] == "mismatched"
+    assert data["shadowComparison"]["mismatchCount"] > 0
+    assert data["shadowComparison"]["reportId"] == 77
+    assert len(reports.reports) == 1
+
+
+def test_dashboard_shadow_does_not_fallback_when_sheets_are_unavailable() -> None:
+    app = _app()
+    app.state.dashboard_queries = DashboardQueryService(
+        dashboard_repository=FakeReadRepository(),
+        rate_provider=FakeRateProvider(),
+        sheet_provider=MissingSheetProvider(),
+        source_mode="db_shadow",
+    )
+
+    response = TestClient(app, raise_server_exceptions=False).get("/api/v1/dashboard")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Sheets dashboard snapshot is unavailable"
+
+
+def test_dashboard_shadow_keeps_sheets_response_when_postgres_is_unavailable() -> None:
+    app = _app()
+    app.state.dashboard_queries = DashboardQueryService(
+        dashboard_repository=FailingDashboardRepository(),
+        rate_provider=FakeRateProvider(),
+        sheet_provider=FakeSheetProvider(),
+        source_mode="db_shadow",
+    )
+
+    response = TestClient(app).get("/api/v1/dashboard")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "sheets"
+    assert data["shadowComparison"] == {
+        "status": "unavailable",
+        "comparedFields": 0,
+        "mismatchCount": 0,
+        "reportId": None,
+    }
+    assert "Postgres shadow snapshot is unavailable" in data["warnings"]
 
 
 def _app(*, role: UserRole = UserRole.accountant) -> FastAPI:
@@ -280,6 +394,33 @@ def _transaction_row() -> dict:
         "group_name": None,
         "actor_name": None,
     }
+
+
+def _stored_shadow_report() -> StoredDashboardComparisonReport:
+    now = datetime(2026, 9, 18, 12, 0, tzinfo=UTC)
+    return StoredDashboardComparisonReport(
+        id=77,
+        business_date=date(2026, 9, 18),
+        primary_source="postgres",
+        status="mismatched",
+        compared_fields=43,
+        mismatch_count=1,
+        absolute_tolerance=Decimal("0.01"),
+        relative_tolerance=Decimal("0.000001"),
+        differences=(
+            DashboardDifference(
+                path="reconciliation.total_rub",
+                sheet_value=Decimal("100"),
+                db_value=Decimal("110"),
+                absolute_delta=Decimal("10"),
+                relative_delta=Decimal("0.090909"),
+                kind=DifferenceKind.ACCOUNTING_ERROR,
+            ),
+        ),
+        sheets_data_as_of=now,
+        db_data_as_of=now,
+        created_at=now,
+    )
 
 
 def _dashboard_snapshot() -> MainDashboardSnapshot:
@@ -374,4 +515,8 @@ def _sheet_snapshot() -> DashboardSheetSnapshot:
                 profit=Decimal("250"),
             )
         },
+        daily_profit=Decimal("250"),
+        monthly_turnover=Decimal("10000"),
+        profitability=Decimal("0.04"),
+        invested_capital=Decimal("4800"),
     )

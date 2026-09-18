@@ -142,6 +142,24 @@ class TestCreateCashCore:
         assert deals[0].source_kind == "cash"
         assert deals[0].body.get("amount") == "1000"
 
+    async def test_balance_neutral_request_marks_chat_as_internal_wallet(
+        self, pool, cash_request_repo, request_schedule_repo, client_id
+    ) -> None:
+        uc = _create_uc(cash_request_repo, request_schedule_repo)
+
+        result = await uc.execute_core(
+            _dep_params(client_group="internal_wallet"),
+            messenger=FakeMessenger(),
+            replier=CollectingReplier(),
+        )
+
+        assert result.ok
+        async with pool.acquire() as connection:
+            assert await connection.fetchval(
+                "SELECT client_group FROM clients WHERE id = $1",
+                client_id,
+            ) == "internal_wallet"
+
     async def test_missing_account_is_reported_without_messages(
         self, cash_request_repo, request_schedule_repo, client_id
     ) -> None:

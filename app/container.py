@@ -50,6 +50,8 @@ from db_asyncpg.repositories import (
 from db_asyncpg.repositories.cash_chat_registry import CashChatRegistryRepo
 from db_asyncpg.repositories.deal_workflow import DealWorkflowRepository
 from db_asyncpg.repositories.deals import DealRepository
+from db_asyncpg.repositories.message_archive import MessageArchiveRepo
+from db_asyncpg.repositories.shadow_comparisons import ShadowComparisonsRepo
 from db_asyncpg.repositories.tg_outbox import TgOutboxRepository
 from db_asyncpg.uow import AsyncpgUnitOfWork
 from gutils.requests_sheet_gateway import (
@@ -59,7 +61,9 @@ from gutils.requests_sheet_gateway import (
 from observability import InMemoryMetrics, MetricsPort
 from services.accounting import (
     CashChatRegistrySyncService,
+    DashboardComparisonService,
     FirmPositionAccountingService,
+    ManualCashService,
     PartnerPurchaseAllocationService,
     ProfitAccrualService,
     WalletFactService,
@@ -67,6 +71,7 @@ from services.accounting import (
 from services.accounting.cash_settlement_service import CashSettlementService
 from services.accounting.fulfillment_service import FulfillmentQueueService
 from services.act_counter import ActCounterService
+from services.best_change import BestChangeService
 from services.cash_requests.calculator import CashRequestCalculator
 from services.cash_requests.card_parser import CashCardParser
 from services.cash_requests.card_presenter import CashCardPresenter
@@ -90,6 +95,7 @@ from services.exchange.source_link_service import ExchangeSourceLinkService
 from services.exchange.text_builder import ExchangeTextBuilder
 from services.exchange.transaction_service import ExchangeTransactionService
 from services.exchange.wallet_presenter import ExchangeWalletPresenter
+from services.message_archive.ports import MessageArchiveRepositoryPort
 from services.messaging import DeferredMessenger, MessengerPort
 from services.payment_watch.settlement_service import DealSettlementService
 from services.request_table import AsyncSheetsTradeGateway
@@ -157,6 +163,7 @@ class CrmRepositories:
     deal_workflow: DealWorkflowRepository
     tg_outbox: TgOutboxRepository
     deal_sources: DealSourceRepositoryAdapter
+    message_archive: MessageArchiveRepositoryPort
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +215,8 @@ class AccountingServices:
     cash_settlements: CashSettlementService
     partner_allocations: PartnerPurchaseAllocationService
     profit_accruals: ProfitAccrualService
+    best_change: BestChangeService | None
+    manual_cash: ManualCashService
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,6 +259,7 @@ class ApplicationContainer:
             deal_workflow=DealWorkflowRepository(pool),
             tg_outbox=TgOutboxRepository(pool),
             deal_sources=DealSourceRepositoryAdapter(source_reader),
+            message_archive=MessageArchiveRepo(pool),
         )
         event_bus = DealEventBus()
         deal_service = DealService(
@@ -307,6 +317,7 @@ class ApplicationContainer:
         )
         accounting = AccountingServices(
             firm_positions=firm_positions,
+            manual_cash=ManualCashService(unit_of_work_factory),
             wallet_facts=WalletFactService(unit_of_work_factory),
             deal_settlements=DealSettlementService(
                 unit_of_work_factory,
@@ -319,9 +330,25 @@ class ApplicationContainer:
                 position_service=firm_positions,
             ),
             profit_accruals=ProfitAccrualService(unit_of_work_factory),
+            best_change=(
+                BestChangeService(
+                    unit_of_work_factory,
+                    chat_id=config.best_change_chat_id,
+                )
+                if config.best_change_chat_id is not None
+                else None
+            ),
             cash_chat_registry=CashChatRegistrySyncService(
                 CashChatRegistryRepo(pool),
                 city_cash_chats=config.city_cash_chat_map,
+                moscow_rub_cash_chats={
+                    name: chat_id
+                    for name, chat_id in (
+                        ("Поэты", config.moscow_poets_chat_id),
+                        ("BS", config.moscow_bs_chat_id),
+                    )
+                    if chat_id is not None
+                },
                 request_chat_ids=frozenset(request_chat_ids),
             ),
         )
@@ -375,6 +402,11 @@ class ApplicationContainer:
                 rate_provider=dashboard_provider,
                 sheet_provider=dashboard_provider,
                 source_mode=config.main_dashboard_source_mode,
+                comparison_service=DashboardComparisonService(
+                    absolute_tolerance=config.dashboard_shadow_absolute_tolerance,
+                    relative_tolerance=config.dashboard_shadow_relative_tolerance,
+                ),
+                comparison_repository=ShadowComparisonsRepo(pool),
             ),
         )
         return cls(

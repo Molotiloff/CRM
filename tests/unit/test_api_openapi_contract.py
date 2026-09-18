@@ -4,15 +4,16 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
 from api.models import ApiUser, HealthResponse, LoginResponse, MetricsResponse
-from api.routers import auth, balances, clients, dashboard, deals, health
+from api.routers import auth, balances, clients, dashboard, deals, health, manual_cash
 from api.schemas.balances import BalancesSnapshotResponse
 from api.schemas.clients import ClientDto, ClientsPageResponse, ClientTransactionsResponse
-from api.schemas.dashboard import DashboardResponse
+from api.schemas.dashboard import DashboardResponse, DashboardShadowReportDto
 from api.schemas.deals import (
     DealDetailsResponse,
     DealsPageResponse,
     SettlementResolutionResponse,
 )
+from api.schemas.manual_cash import ManualCashMoveDto, ManualCashSnapshotResponse
 
 RouteKey = tuple[str, str]
 
@@ -25,6 +26,7 @@ API_ROUTERS = (
     clients.router,
     balances.router,
     dashboard.router,
+    manual_cash.router,
     deals.router,
 )
 
@@ -41,7 +43,17 @@ EXPECTED_SUCCESS_MODELS: dict[RouteKey, tuple[int, object]] = {
     ),
     ("GET", "/api/v1/balances"): (200, BalancesSnapshotResponse),
     ("GET", "/api/v1/dashboard"): (200, DashboardResponse),
+    ("GET", "/api/v1/dashboard/shadow-reports/{report_id}"): (
+        200,
+        DashboardShadowReportDto,
+    ),
     ("GET", "/api/v1/dashboard/rates"): (200, dict[str, float]),
+    ("GET", "/api/v1/dashboard/manual-cash"): (200, ManualCashSnapshotResponse),
+    ("POST", "/api/v1/dashboard/manual-cash/moves"): (201, ManualCashMoveDto),
+    ("POST", "/api/v1/dashboard/manual-cash/moves/{move_id}/reverse"): (
+        200,
+        ManualCashMoveDto,
+    ),
     ("GET", "/api/v1/deals"): (200, DealsPageResponse),
     ("POST", "/api/v1/deals"): (201, DealDetailsResponse),
     ("GET", "/api/v1/deals/{deal_id}"): (200, DealDetailsResponse),
@@ -65,7 +77,17 @@ EXPECTED_ERROR_STATUSES: dict[RouteKey, frozenset[int]] = {
     ("GET", "/api/v1/clients/{client_id}/transactions"): frozenset({401, 404}),
     ("GET", "/api/v1/balances"): AUTH_ERRORS,
     ("GET", "/api/v1/dashboard"): frozenset({401, 403, 503}),
+    ("GET", "/api/v1/dashboard/shadow-reports/{report_id}"): frozenset(
+        {401, 403, 404}
+    ),
     ("GET", "/api/v1/dashboard/rates"): ROLE_ERRORS,
+    ("GET", "/api/v1/dashboard/manual-cash"): ROLE_ERRORS,
+    ("POST", "/api/v1/dashboard/manual-cash/moves"): frozenset(
+        {400, 401, 403, 409}
+    ),
+    ("POST", "/api/v1/dashboard/manual-cash/moves/{move_id}/reverse"): frozenset(
+        {400, 401, 403, 409}
+    ),
     ("GET", "/api/v1/deals"): frozenset({400, 401, 403}),
     ("POST", "/api/v1/deals"): frozenset({400, 401, 403, 409}),
     ("GET", "/api/v1/deals/{deal_id}"): frozenset({401, 403, 404}),

@@ -19,6 +19,7 @@ class DealType(StrEnum):
     yuan = "yuan"
     invoice = "invoice"
     profit = "profit"
+    best_change = "best_change"
 
 
 class DealStatus(StrEnum):
@@ -144,6 +145,7 @@ class DealItemDto(BaseModel):
     clientShortName: str
     dealType: str
     asset: str
+    direction: str
     amountRub: float
     city: str
     status: DealStatus
@@ -185,11 +187,29 @@ class DealStatusEventDto(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class BestChangeDetailsDto(BaseModel):
+    operation: str
+    qtyUsdt: float | None = None
+    marketRateRub: float | None = None
+    clientRateRub: float | None = None
+    unitSpreadRub: float | None = None
+    grossSpreadRub: float | None = None
+    profitPoolRub: float | None = None
+    partnerShareRub: float | None = None
+    skyexProfitRub: float | None = None
+    platformFeeUsdt: float | None = None
+    originalDealId: str | None = None
+    replacementDealId: str | None = None
+    correctionReason: str | None = None
+    correctionActor: str | None = None
+
+
 class DealDetailsResponse(BaseModel):
     deal: DealItemDto
     dealNo: str
     createdAt: str
     updatedAt: str
+    dealAt: str | None = None
     source: str
     sourceKind: str | None = None
     counterpartyName: str | None = None
@@ -200,5 +220,6 @@ class DealDetailsResponse(BaseModel):
     paymentWatchId: str | None = None
     paymentWatchStatus: str | None = None
     body: dict[str, Any] = Field(default_factory=dict)
+    bestChange: BestChangeDetailsDto | None = None
     legs: list[DealLegDto] = Field(default_factory=list)
     statusEvents: list[DealStatusEventDto] = Field(default_factory=list)

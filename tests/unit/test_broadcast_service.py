@@ -56,6 +56,24 @@ async def test_send_filters_group_and_counts_delivery_outcomes() -> None:
     assert result.attempted == 2
 
 
+async def test_silent_accounting_chats_are_excluded_from_broadcast() -> None:
+    service = BroadcastService(
+        repo=ClientRepoStub(
+            [
+                {"chat_id": -100, "client_group": None},
+                {"chat_id": -200, "client_group": None},
+            ]
+        ),
+        excluded_chat_ids={-200},
+    )
+    delivery = DeliveryStub({-100: BroadcastDeliveryStatus.SENT})
+
+    result = await service.send(BroadcastCommand(), delivery=delivery)
+
+    assert result.sent == 1
+    assert result.attempted == 1
+
+
 def test_command_parser_and_target_text_are_transport_neutral() -> None:
     assert BroadcastService.extract_group_from_command("/всем partners") == "partners"
     assert BroadcastService.extract_group_from_command("/всем") is None
