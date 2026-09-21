@@ -1,18 +1,27 @@
 [Unit]
 Description=SkyEx CRM frontend
-After=network.target skyex-bot.service
-Wants=skyex-bot.service
+After=network-online.target skyex-crm-backend.service
+Wants=network-online.target skyex-crm-backend.service
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/skyex-crm-front
-EnvironmentFile=-/etc/skyex/crm-front.env
+Group=root
+WorkingDirectory=/root/bookkeeping
+EnvironmentFile=/etc/skyex/crm-front.env
 Environment=HOSTNAME=127.0.0.1
 Environment=PORT=3000
-ExecStart=/usr/bin/node .next/standalone/server.js
+Environment=NODE_ENV=production
+Environment=PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/opt/node/bin/node .next/standalone/server.js
 Restart=always
 RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target
