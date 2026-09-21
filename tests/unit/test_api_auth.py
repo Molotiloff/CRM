@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -13,7 +10,6 @@ from api.auth import (
     AuthError,
     create_access_token,
     decode_access_token,
-    verify_telegram_login,
 )
 from api.exception_handlers import register_exception_handlers
 from api.models import ApiUser, HealthResponse, LoginResponse, UserRole
@@ -22,41 +18,18 @@ from api.routers import health as health_router
 from api.schemas.common import ErrorResponse
 
 BOT_TOKEN = "123456:test-token"
-
-
-def test_verify_telegram_login_accepts_valid_hash() -> None:
-    payload = {
-        "id": 42,
-        "first_name": "Alex",
-        "username": "alex",
-        "auth_date": 1000,
-    }
-    payload["hash"] = _telegram_hash(payload)
-
-    verify_telegram_login(payload, bot_token=BOT_TOKEN, now=1000)
-
-
-def test_verify_telegram_login_rejects_invalid_hash() -> None:
-    payload = {
-        "id": 42,
-        "first_name": "Alex",
-        "auth_date": 1000,
-        "hash": "bad",
-    }
-
-    with pytest.raises(AuthError):
-        verify_telegram_login(payload, bot_token=BOT_TOKEN, now=1000)
+JWT_SECRET = "test-jwt-secret-with-at-least-32-characters"
 
 
 def test_access_token_roundtrip() -> None:
     token = create_access_token(
         tg_user_id=42,
-        bot_token=BOT_TOKEN,
+        secret=JWT_SECRET,
         ttl_seconds=60,
         now=1000,
     )
 
-    payload = decode_access_token(token, bot_token=BOT_TOKEN, now=1059)
+    payload = decode_access_token(token, secret=JWT_SECRET, now=1059)
 
     assert payload.sub == "42"
     assert payload.exp == 1060
@@ -65,25 +38,37 @@ def test_access_token_roundtrip() -> None:
 def test_access_token_rejects_expired_token() -> None:
     token = create_access_token(
         tg_user_id=42,
-        bot_token=BOT_TOKEN,
+        secret=JWT_SECRET,
         ttl_seconds=60,
         now=1000,
     )
 
     with pytest.raises(AuthError):
-        decode_access_token(token, bot_token=BOT_TOKEN, now=1060)
+        decode_access_token(token, secret=JWT_SECRET, now=1060)
 
 
 def test_access_token_rejects_tampered_signature() -> None:
     token = create_access_token(
         tg_user_id=42,
-        bot_token=BOT_TOKEN,
+        secret=JWT_SECRET,
         ttl_seconds=60,
         now=1000,
     )
 
     with pytest.raises(AuthError):
-        decode_access_token(f"{token}x", bot_token=BOT_TOKEN, now=1000)
+        decode_access_token(f"{token}x", secret=JWT_SECRET, now=1000)
+
+
+def test_access_token_is_not_signed_with_bot_token() -> None:
+    token = create_access_token(
+        tg_user_id=42,
+        secret=JWT_SECRET,
+        ttl_seconds=60,
+        now=1000,
+    )
+
+    with pytest.raises(AuthError):
+        decode_access_token(token, secret=BOT_TOKEN, now=1000)
 
 
 def test_me_allows_explicit_dev_auth_bypass() -> None:
@@ -112,41 +97,58 @@ def test_health_route_returns_runtime_contract() -> None:
     assert contract.status == "ok"
 
 
-def test_telegram_login_returns_token_user_and_cookie_contract() -> None:
+def test_legacy_telegram_login_route_is_removed() -> None:
+    response = TestClient(_auth_app(_AuthUserRepository(active=True))).post(
+        "/api/v1/auth/telegram",
+        json={},
+    )
+
+    assert response.status_code == 404
+
+
+def test_telegram_oidc_login_returns_token_user_and_cookie_contract(monkeypatch) -> None:
+    async def exchange(**kwargs) -> int:
+        assert kwargs["code"] == "telegram-code"
+        assert kwargs["client_id"] == "8453451926"
+        return 42
+
+    monkeypatch.setattr(auth_router, "exchange_telegram_oidc_code", exchange)
     repository = _AuthUserRepository(active=True)
     client = TestClient(_auth_app(repository))
-    payload = _login_payload()
 
-    response = client.post("/api/v1/auth/telegram", json=payload)
+    response = client.post(
+        "/api/v1/auth/telegram/oidc",
+        json={
+            "code": "telegram-code",
+            "code_verifier": "v" * 43,
+            "redirect_uri": "https://crm.example/api/auth/telegram/oidc/callback",
+            "nonce": "n" * 32,
+        },
+    )
 
     assert response.status_code == 200
     contract = LoginResponse.model_validate(response.json())
-    assert contract.token_type == "bearer"
     assert contract.user.tg_user_id == 42
     assert client.cookies.get("crm_access_token") == contract.access_token
-    assert repository.seeded_admin_ids == [42]
+    assert "Secure" in response.headers["set-cookie"]
 
 
-def test_telegram_login_returns_runtime_auth_error_contract() -> None:
-    client = TestClient(_auth_app(_AuthUserRepository(active=True)))
-    payload = _login_payload()
-    payload["hash"] = "invalid"
+def test_telegram_oidc_login_requires_configuration() -> None:
+    app = _auth_app(_AuthUserRepository(active=True))
+    app.state.config.telegram_oidc_client_id = None
+    app.state.config.telegram_oidc_client_secret = None
 
-    response = client.post("/api/v1/auth/telegram", json=payload)
+    response = TestClient(app).post(
+        "/api/v1/auth/telegram/oidc",
+        json={
+            "code": "telegram-code",
+            "code_verifier": "v" * 43,
+            "redirect_uri": "https://crm.example/api/auth/telegram/oidc/callback",
+            "nonce": "n" * 32,
+        },
+    )
 
-    assert response.status_code == 401
-    error = ErrorResponse.model_validate(response.json())
-    assert error.detail == "Telegram login hash is invalid"
-
-
-def test_telegram_login_returns_inactive_user_contract() -> None:
-    client = TestClient(_auth_app(_AuthUserRepository(active=False)))
-
-    response = client.post("/api/v1/auth/telegram", json=_login_payload())
-
-    assert response.status_code == 403
-    error = ErrorResponse.model_validate(response.json())
-    assert error.detail == "CRM user is not active"
+    assert response.status_code == 503
 
 
 def test_me_returns_unauthorized_runtime_contract_without_credentials() -> None:
@@ -195,30 +197,15 @@ def _auth_app(repository: _AuthUserRepository) -> FastAPI:
     app = FastAPI()
     app.state.config = SimpleNamespace(
         bot_token=BOT_TOKEN,
+        crm_jwt_secret=JWT_SECRET,
         api_jwt_ttl_seconds=3600,
         admin_ids=[42],
         api_dev_auth_bypass=False,
         api_dev_tg_user_id=None,
+        telegram_oidc_client_id="8453451926",
+        telegram_oidc_client_secret="oidc-secret",
     )
     app.state.user_repository = repository
     register_exception_handlers(app)
     app.include_router(auth_router.router)
     return app
-
-
-def _login_payload() -> dict[str, object]:
-    payload: dict[str, object] = {
-        "id": 42,
-        "first_name": "Admin",
-        "auth_date": int(time.time()),
-    }
-    payload["hash"] = _telegram_hash(payload)
-    return payload
-
-
-def _telegram_hash(payload: dict[str, object]) -> str:
-    data_check_string = "\n".join(
-        f"{key}={value}" for key, value in sorted(payload.items()) if key != "hash"
-    )
-    secret_key = hashlib.sha256(BOT_TOKEN.encode()).digest()
-    return hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()

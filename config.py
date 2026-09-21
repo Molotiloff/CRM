@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from ipaddress import ip_address
 
@@ -103,6 +103,7 @@ def _parse_city_chat_map(
 class Config:
     bot_token: str
     database_url: str
+    crm_jwt_secret: str
     converter_api_base_url: str | None
     converter_api_token: str | None
     tronscan_api_base_url: str | None
@@ -147,6 +148,10 @@ class Config:
     api_jwt_ttl_seconds: int
     api_dev_auth_bypass: bool
     api_dev_tg_user_id: int | None
+    telegram_oidc_client_id: str | None = None
+    telegram_oidc_client_secret: str | None = None
+    api_ws_allowed_origins: list[str] = field(default_factory=list)
+    api_ws_max_connections: int = 100
     main_dashboard_source_mode: str = "sheets"
     dashboard_shadow_absolute_tolerance: Decimal = Decimal("0.01")
     dashboard_shadow_relative_tolerance: Decimal = Decimal("0.000001")
@@ -173,6 +178,10 @@ class Config:
         db_url = os.getenv("DATABASE_URL", "").strip()
         if not db_url:
             raise RuntimeError("Не найден DATABASE_URL в окружении")
+
+        crm_jwt_secret = os.getenv("CRM_JWT_SECRET", "").strip()
+        if len(crm_jwt_secret) < 32:
+            raise RuntimeError("CRM_JWT_SECRET должен содержать минимум 32 символа")
 
         converter_api_base_url = (os.getenv("CONVERTER_API_BASE_URL", "") or "").strip() or None
         converter_api_token = (os.getenv("CONVERTER_API_TOKEN", "") or "").strip() or None
@@ -250,6 +259,27 @@ class Config:
         )
         api_dev_auth_bypass = _parse_bool(os.getenv("CRM_DEV_AUTH_BYPASS"), default=False)
         api_dev_tg_user_id = _parse_int(os.getenv("CRM_DEV_TG_USER_ID"))
+        telegram_oidc_client_id = (
+            os.getenv("TELEGRAM_OIDC_CLIENT_ID", "").strip() or None
+        )
+        telegram_oidc_client_secret = (
+            os.getenv("TELEGRAM_OIDC_CLIENT_SECRET", "").strip() or None
+        )
+        if bool(telegram_oidc_client_id) != bool(telegram_oidc_client_secret):
+            raise RuntimeError(
+                "TELEGRAM_OIDC_CLIENT_ID и TELEGRAM_OIDC_CLIENT_SECRET "
+                "должны быть заданы вместе"
+            )
+        api_ws_allowed_origins = [
+            origin.strip().rstrip("/")
+            for origin in (os.getenv("CRM_API_WS_ALLOWED_ORIGINS", "") or "").split(",")
+            if origin.strip()
+        ]
+        api_ws_max_connections = int(
+            (os.getenv("CRM_API_WS_MAX_CONNECTIONS", "") or "100").strip()
+        )
+        if api_ws_max_connections < 1:
+            raise RuntimeError("CRM_API_WS_MAX_CONNECTIONS должен быть больше нуля")
         main_dashboard_source_mode = (
             os.getenv("MAIN_DASHBOARD_SOURCE_MODE", "sheets") or "sheets"
         ).strip().lower()
@@ -311,6 +341,7 @@ class Config:
         return cls(
             bot_token=token,
             database_url=db_url,
+            crm_jwt_secret=crm_jwt_secret,
             converter_api_base_url=converter_api_base_url,
             converter_api_token=converter_api_token,
             tronscan_api_base_url=tronscan_api_base_url,
@@ -338,6 +369,10 @@ class Config:
             api_jwt_ttl_seconds=api_jwt_ttl_seconds,
             api_dev_auth_bypass=api_dev_auth_bypass,
             api_dev_tg_user_id=api_dev_tg_user_id,
+            telegram_oidc_client_id=telegram_oidc_client_id,
+            telegram_oidc_client_secret=telegram_oidc_client_secret,
+            api_ws_allowed_origins=api_ws_allowed_origins,
+            api_ws_max_connections=api_ws_max_connections,
             main_dashboard_source_mode=main_dashboard_source_mode,
             dashboard_shadow_absolute_tolerance=dashboard_shadow_absolute_tolerance,
             dashboard_shadow_relative_tolerance=dashboard_shadow_relative_tolerance,

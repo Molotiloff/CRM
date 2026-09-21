@@ -261,7 +261,7 @@ class ApplicationContainer:
             deal_sources=DealSourceRepositoryAdapter(source_reader),
             message_archive=MessageArchiveRepo(pool),
         )
-        event_bus = DealEventBus()
+        event_bus = DealEventBus(max_subscribers=config.api_ws_max_connections)
         deal_service = DealService(
             crm_repositories.deals,
             event_bus,

@@ -20,41 +20,10 @@ class JwtPayload:
     exp: int
 
 
-def verify_telegram_login(
-    payload: Mapping[str, Any],
-    *,
-    bot_token: str,
-    max_age_seconds: int = 24 * 60 * 60,
-    now: int | None = None,
-) -> None:
-    expected_hash = str(payload.get("hash", ""))
-    if not expected_hash:
-        raise AuthError("Telegram login hash is missing")
-
-    auth_date = int(payload.get("auth_date", 0) or 0)
-    current_time = int(time.time() if now is None else now)
-    if auth_date <= 0 or current_time - auth_date > max_age_seconds:
-        raise AuthError("Telegram login payload is expired")
-
-    data_check_string = "\n".join(
-        f"{key}={value}"
-        for key, value in sorted(payload.items())
-        if key != "hash" and value is not None
-    )
-    secret_key = hashlib.sha256(bot_token.encode()).digest()
-    actual_hash = hmac.new(
-        secret_key,
-        data_check_string.encode(),
-        hashlib.sha256,
-    ).hexdigest()
-    if not hmac.compare_digest(actual_hash, expected_hash):
-        raise AuthError("Telegram login hash is invalid")
-
-
 def create_access_token(
     *,
     tg_user_id: int,
-    bot_token: str,
+    secret: str,
     ttl_seconds: int,
     now: int | None = None,
 ) -> str:
@@ -62,18 +31,18 @@ def create_access_token(
     header = {"alg": "HS256", "typ": "JWT"}
     payload = {"sub": str(tg_user_id), "exp": current_time + ttl_seconds}
     signing_input = ".".join((_b64_json(header), _b64_json(payload)))
-    signature = _sign(signing_input, bot_token)
+    signature = _sign(signing_input, secret)
     return f"{signing_input}.{signature}"
 
 
-def decode_access_token(token: str, *, bot_token: str, now: int | None = None) -> JwtPayload:
+def decode_access_token(token: str, *, secret: str, now: int | None = None) -> JwtPayload:
     try:
         header_part, payload_part, signature_part = token.split(".", 2)
     except ValueError:
         raise AuthError("Malformed token") from None
 
     signing_input = f"{header_part}.{payload_part}"
-    expected_signature = _sign(signing_input, bot_token)
+    expected_signature = _sign(signing_input, secret)
     if not hmac.compare_digest(expected_signature, signature_part):
         raise AuthError("Invalid token signature")
 
@@ -90,9 +59,9 @@ def decode_access_token(token: str, *, bot_token: str, now: int | None = None) -
     return JwtPayload(sub=sub, exp=exp)
 
 
-def _sign(signing_input: str, bot_token: str) -> str:
+def _sign(signing_input: str, secret: str) -> str:
     digest = hmac.new(
-        bot_token.encode(),
+        secret.encode(),
         signing_input.encode(),
         hashlib.sha256,
     ).digest()

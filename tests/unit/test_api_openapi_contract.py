@@ -33,7 +33,7 @@ API_ROUTERS = (
 EXPECTED_SUCCESS_MODELS: dict[RouteKey, tuple[int, object]] = {
     ("GET", "/api/v1/health"): (200, HealthResponse),
     ("GET", "/api/v1/metrics"): (200, MetricsResponse),
-    ("POST", "/api/v1/auth/telegram"): (200, LoginResponse),
+    ("POST", "/api/v1/auth/telegram/oidc"): (200, LoginResponse),
     ("GET", "/api/v1/me"): (200, ApiUser),
     ("GET", "/api/v1/clients"): (200, ClientsPageResponse),
     ("GET", "/api/v1/clients/{client_id}"): (200, ClientDto),
@@ -69,8 +69,8 @@ EXPECTED_SUCCESS_MODELS: dict[RouteKey, tuple[int, object]] = {
 
 EXPECTED_ERROR_STATUSES: dict[RouteKey, frozenset[int]] = {
     ("GET", "/api/v1/health"): frozenset(),
-    ("GET", "/api/v1/metrics"): frozenset(),
-    ("POST", "/api/v1/auth/telegram"): frozenset({401, 403}),
+    ("GET", "/api/v1/metrics"): ROLE_ERRORS,
+    ("POST", "/api/v1/auth/telegram/oidc"): frozenset({401, 403, 503}),
     ("GET", "/api/v1/me"): AUTH_ERRORS,
     ("GET", "/api/v1/clients"): AUTH_ERRORS,
     ("GET", "/api/v1/clients/{client_id}"): frozenset({401, 404}),

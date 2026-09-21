@@ -1,4 +1,5 @@
-aiogram==3.22.0
+aiogram==3.31.0
+aiohttp==3.14.3
 asyncpg==0.30.0
 alembic==1.16.5
 SQLAlchemy==2.0.43
@@ -10,10 +11,11 @@ gspread==6.2.1
 google-api-python-client==2.198.0
 xlsxwriter==3.2.9
 httpx==0.28.1
+PyJWT[crypto]==2.14.0
 APScheduler==3.11.2
 certifi==2025.8.3
 websockets==16.0
 requests==2.33.0
 beautifulsoup4==4.13.5
-Pillow==12.2.0
+Pillow==12.3.0
 ijson==3.4.0.post0

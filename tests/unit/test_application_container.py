@@ -15,6 +15,7 @@ def _config() -> Config:
     return Config(
         bot_token="123456:test-token",
         database_url="postgresql://test:test@127.0.0.1:5432/test",
+        crm_jwt_secret="test-jwt-secret-with-at-least-32-characters",
         converter_api_base_url=None,
         converter_api_token=None,
         tronscan_api_base_url=None,

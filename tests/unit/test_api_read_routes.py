@@ -241,8 +241,17 @@ def test_dashboard_shadow_report_returns_not_found() -> None:
     assert response.json()["detail"] == "Dashboard shadow report 404 not found"
 
 
-def test_dashboard_route_rejects_manager_statistics_access() -> None:
+def test_dashboard_route_allows_manager_access() -> None:
     client = TestClient(_app(role=UserRole.manager))
+
+    response = client.get("/api/v1/dashboard")
+
+    assert response.status_code == 200
+    DashboardResponse.model_validate(response.json())
+
+
+def test_dashboard_route_rejects_cashier_access() -> None:
+    client = TestClient(_app(role=UserRole.cashier))
 
     response = client.get("/api/v1/dashboard")
 

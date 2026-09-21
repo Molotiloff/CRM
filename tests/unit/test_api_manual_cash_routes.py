@@ -77,8 +77,28 @@ def test_manual_cash_routes_map_commands_and_results() -> None:
     assert service.reversed.move_id == 10
 
 
-def test_manual_cash_routes_require_accountant_role() -> None:
-    response = TestClient(_app(FakeManualCashService(), UserRole.manager)).get(
+def test_manager_can_read_manual_cash_but_cannot_change_it() -> None:
+    client = TestClient(_app(FakeManualCashService(), UserRole.manager))
+
+    snapshot = client.get("/api/v1/dashboard/manual-cash")
+    recorded = client.post(
+        "/api/v1/dashboard/manual-cash/moves",
+        json={
+            "accountCode": "moscow_poets",
+            "operation": "inflow",
+            "amount": "100",
+            "effectiveAt": "2026-09-02",
+            "comment": "Пополнение",
+            "idempotencyKey": "manual:manager:record",
+        },
+    )
+
+    assert snapshot.status_code == 200
+    assert recorded.status_code == 403
+
+
+def test_cashier_cannot_read_manual_cash() -> None:
+    response = TestClient(_app(FakeManualCashService(), UserRole.cashier)).get(
         "/api/v1/dashboard/manual-cash"
     )
 

@@ -47,7 +47,7 @@ async def get_current_user(
         raise _unauthorized()
 
     try:
-        payload = decode_access_token(token, bot_token=config.bot_token)
+        payload = decode_access_token(token, secret=config.crm_jwt_secret)
         tg_user_id = int(payload.sub)
     except (AuthError, ValueError):
         raise _unauthorized() from None

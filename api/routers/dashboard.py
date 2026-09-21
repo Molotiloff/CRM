@@ -25,7 +25,7 @@ def get_dashboard_queries(request: Request) -> DashboardQueryService:
     ),
 )
 async def dashboard(
-    _: ApiUser = Depends(require_role(UserRole.accountant)),
+    _: ApiUser = Depends(require_role(UserRole.manager)),
     queries: DashboardQueryService = Depends(get_dashboard_queries),
 ) -> DashboardResponse:
     return await queries.get_dashboard()

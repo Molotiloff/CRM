@@ -5,6 +5,23 @@ import pytest
 from config import Config, _parse_city_chat_map
 
 
+@pytest.fixture(autouse=True)
+def _jwt_secret(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "CRM_JWT_SECRET",
+        "test-jwt-secret-with-at-least-32-characters",
+    )
+
+
+def test_jwt_secret_is_required(monkeypatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123456:test-token")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost/test")
+    monkeypatch.setenv("CRM_JWT_SECRET", "")
+
+    with pytest.raises(RuntimeError, match="CRM_JWT_SECRET"):
+        Config.from_env()
+
+
 def test_city_cash_chat_map_parses_named_cities(monkeypatch) -> None:
     monkeypatch.setenv("MAIN_DASHBOARD_SOURCE_MODE", "sheets")
     monkeypatch.setenv("BOT_TOKEN", "123456:test-token")
@@ -39,6 +56,43 @@ def test_dashboard_source_mode_is_validated(monkeypatch) -> None:
     monkeypatch.setenv("MAIN_DASHBOARD_SOURCE_MODE", "mixed")
 
     with pytest.raises(RuntimeError, match="MAIN_DASHBOARD_SOURCE_MODE"):
+        Config.from_env()
+
+
+def test_telegram_oidc_credentials_must_be_configured_together(monkeypatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123456:test-token")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost/test")
+    monkeypatch.setenv("TELEGRAM_OIDC_CLIENT_ID", "123456")
+    monkeypatch.setenv("TELEGRAM_OIDC_CLIENT_SECRET", "")
+
+    with pytest.raises(RuntimeError, match="должны быть заданы вместе"):
+        Config.from_env()
+
+
+def test_websocket_security_settings_are_loaded(monkeypatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123456:test-token")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost/test")
+    monkeypatch.setenv(
+        "CRM_API_WS_ALLOWED_ORIGINS",
+        "https://skyex.work.gd/, http://localhost:3000",
+    )
+    monkeypatch.setenv("CRM_API_WS_MAX_CONNECTIONS", "25")
+
+    config = Config.from_env()
+
+    assert config.api_ws_allowed_origins == [
+        "https://skyex.work.gd",
+        "http://localhost:3000",
+    ]
+    assert config.api_ws_max_connections == 25
+
+
+def test_websocket_connection_limit_must_be_positive(monkeypatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123456:test-token")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost/test")
+    monkeypatch.setenv("CRM_API_WS_MAX_CONNECTIONS", "0")
+
+    with pytest.raises(RuntimeError, match="должен быть больше нуля"):
         Config.from_env()
 
 

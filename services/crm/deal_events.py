@@ -23,11 +23,21 @@ class DealEvent:
         }
 
 
+class DealEventSubscriberLimitError(RuntimeError):
+    pass
+
+
 class DealEventBus:
     """Best-effort live updates; durable deal state and delivery live in PostgreSQL."""
 
-    def __init__(self, *, queue_size: int = 100) -> None:
+    def __init__(
+        self,
+        *,
+        queue_size: int = 100,
+        max_subscribers: int = 100,
+    ) -> None:
         self._queue_size = queue_size
+        self._max_subscribers = max_subscribers
         self._subscribers: set[asyncio.Queue[DealEvent]] = set()
 
     async def publish(self, event: DealEvent) -> None:
@@ -38,6 +48,8 @@ class DealEventBus:
 
     @asynccontextmanager
     async def subscribe(self) -> AsyncIterator[asyncio.Queue[DealEvent]]:
+        if len(self._subscribers) >= self._max_subscribers:
+            raise DealEventSubscriberLimitError("Too many realtime subscribers")
         queue: asyncio.Queue[DealEvent] = asyncio.Queue(maxsize=self._queue_size)
         self._subscribers.add(queue)
         try:

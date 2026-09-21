@@ -34,7 +34,7 @@ def get_service(request: Request) -> ManualCashService:
 )
 async def snapshot(
     limit: int = Query(20, ge=1, le=100),
-    _: ApiUser = Depends(require_role(UserRole.accountant)),
+    _: ApiUser = Depends(require_role(UserRole.manager)),
     service: ManualCashService = Depends(get_service),
 ) -> ManualCashSnapshotResponse:
     accounts, moves = await service.snapshot(limit=limit)
