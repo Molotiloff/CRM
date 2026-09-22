@@ -51,3 +51,5 @@ class CashSettlementResult:
     client_transaction_id: int | None
     position_move_id: int | None
     repeated: bool
+    client_balance: Decimal | None = None
+    client_precision: int | None = None

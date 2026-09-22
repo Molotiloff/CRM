@@ -27,6 +27,7 @@ from telegram_adapters.auth import (
 )
 from telegram_adapters.city_cash_transfer import (
     city_cash_transfer_to_client,
+    send_cash_settlement_balance_to_client,
     send_cash_settlement_evidence_to_client,
 )
 from telegram_adapters.errors import suppress_telegram_edit_errors
@@ -250,9 +251,10 @@ class WalletsHandler:
                 return
             suffix = " (повтор)" if settled.repeated else ""
             delivery_warning = ""
+            client_chat_id = settled.client_chat_id
             if any(evidence_message.photo for evidence_message in evidence_messages):
                 try:
-                    await send_cash_settlement_evidence_to_client(
+                    client_chat_id = await send_cash_settlement_evidence_to_client(
                         repo=self.repo,
                         bot=message.bot,
                         evidence_messages=evidence_messages,
@@ -270,15 +272,41 @@ class WalletsHandler:
                     delivery_warning = (
                         "\n⚠️ Не удалось отправить фото в чат клиента."
                     )
-            await self._answer(
-                message,
-                f"Заявка {settled.request_id} проведена{suffix}!\n"
-                f"Клиент: {settled.client_name}{delivery_warning}",
-            )
             signed_qty = (
                 settled.actual_qty
                 if settled.request_kind == "dep"
                 else -settled.actual_qty
+            )
+            if (
+                settled.client_balance is not None
+                and settled.client_precision is not None
+            ):
+                try:
+                    client_chat_id = await send_cash_settlement_balance_to_client(
+                        repo=self.repo,
+                        bot=message.bot,
+                        target_chat_id=client_chat_id,
+                        target_client_id=settled.client_id,
+                        currency_code=settled.currency,
+                        signed_amount=signed_qty,
+                        balance=settled.client_balance,
+                        precision=settled.client_precision,
+                    )
+                except Exception:
+                    log.exception(
+                        "FAILED sending cash settlement client balance "
+                        "request_id=%s client_id=%s chat_id=%s",
+                        settled.request_id,
+                        settled.client_id,
+                        client_chat_id,
+                    )
+                    delivery_warning += (
+                        "\n⚠️ Не удалось отправить баланс в чат клиента."
+                    )
+            await self._answer(
+                message,
+                f"Заявка {settled.request_id} проведена{suffix}!\n"
+                f"Клиент: {settled.client_name}{delivery_warning}",
             )
             await self._answer(
                 message,

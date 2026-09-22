@@ -47,6 +47,10 @@ async def test_office_deposit_updates_cash_and_client_without_position(
     assert result.client_chat_id == CLIENT_CHAT
     assert result.client_name == "Тестовый чат"
     assert result.position_move_id is None
+    assert result.cash_balance == Decimal("1000")
+    assert result.cash_precision == 2
+    assert result.client_balance == Decimal("1000")
+    assert result.client_precision == 2
     assert await balance_of(repo, client_id, "USD") == Decimal("1000")
     assert await balance_of(repo, cash_client_id, "USD") == Decimal("1000")
     async with pool.acquire() as connection:
@@ -154,6 +158,9 @@ async def test_duplicate_command_is_idempotent(pool, repo, client_id) -> None:
     assert repeated.client_id == client_id
     assert repeated.client_chat_id == CLIENT_CHAT
     assert repeated.client_name == "Тестовый чат"
+    assert repeated.cash_balance == Decimal("1000")
+    assert repeated.client_balance == Decimal("1000")
+    assert repeated.client_precision == 2
     assert await balance_of(repo, client_id, "USD") == Decimal("1000")
     assert await balance_of(repo, cash_client_id, "USD") == Decimal("1000")
 
@@ -186,6 +193,8 @@ async def test_internal_wallet_request_updates_only_city_cash(
     )
 
     assert result.client_transaction_id is None
+    assert result.client_balance is None
+    assert result.client_precision is None
     assert await balance_of(repo, client_id, "RUB") == 0
     assert await balance_of(repo, cash_client_id, "RUB") == Decimal("875")
     async with pool.acquire() as connection:

@@ -111,6 +111,38 @@ async def send_cash_settlement_evidence_to_client(
     )
 
 
+async def send_cash_settlement_balance_to_client(
+    *,
+    repo: ClientTransferRepositoryPort,
+    bot: Bot,
+    target_chat_id: int,
+    target_client_id: int,
+    currency_code: str,
+    signed_amount: Decimal,
+    balance: Decimal,
+    precision: int,
+) -> int:
+    """Send the client's post-settlement wallet balance as a separate message."""
+    code = currency_code.strip().lower()
+    text = (
+        "Запомнил. "
+        f"{format_amount_core(signed_amount, precision)} {code}\n"
+        "Баланс: "
+        f"{format_amount_core(balance, precision)} {code}"
+    )
+
+    async def _send_balance(chat_id: int):
+        return await bot.send_message(chat_id=chat_id, text=text)
+
+    return await _safe_send_with_migration(
+        repo=repo,
+        bot=bot,
+        target_chat_id=target_chat_id,
+        target_client_id=target_client_id,
+        send_coro_factory=_send_balance,
+    )
+
+
 async def city_cash_transfer_to_client(
     *,
     repo: ClientTransferRepositoryPort,

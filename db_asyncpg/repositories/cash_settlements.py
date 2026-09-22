@@ -108,6 +108,8 @@ class CashSettlementRepo(ConnectionBoundRepo):
                        cash_account.balance AS cash_balance,
                        cash_account.precision AS cash_precision,
                        settlement.client_transaction_id,
+                       client_account.balance AS client_balance,
+                       client_account.precision AS client_precision,
                        settlement.position_move_id
                 FROM cash_settlements settlement
                 JOIN deals deal ON deal.id = settlement.deal_id
@@ -116,6 +118,10 @@ class CashSettlementRepo(ConnectionBoundRepo):
                   ON cash_transaction.id = settlement.cash_transaction_id
                 JOIN client_accounts cash_account
                   ON cash_account.id = cash_transaction.account_id
+                LEFT JOIN transactions client_transaction
+                  ON client_transaction.id = settlement.client_transaction_id
+                LEFT JOIN client_accounts client_account
+                  ON client_account.id = client_transaction.account_id
                 WHERE settlement.request_id = $1
                 """,
                 request_id,
@@ -150,12 +156,18 @@ class CashSettlementRepo(ConnectionBoundRepo):
                 )
                 SELECT inserted.*,
                        cash_account.balance AS cash_balance,
-                       cash_account.precision AS cash_precision
+                       cash_account.precision AS cash_precision,
+                       client_account.balance AS client_balance,
+                       client_account.precision AS client_precision
                 FROM inserted
                 JOIN transactions cash_transaction
                   ON cash_transaction.id = inserted.cash_transaction_id
                 JOIN client_accounts cash_account
                   ON cash_account.id = cash_transaction.account_id
+                LEFT JOIN transactions client_transaction
+                  ON client_transaction.id = inserted.client_transaction_id
+                LEFT JOIN client_accounts client_account
+                  ON client_account.id = client_transaction.account_id
                 """,
                 context.deal_id,
                 context.request_id,
@@ -219,4 +231,14 @@ class CashSettlementRepo(ConnectionBoundRepo):
                 else None
             ),
             repeated=repeated,
+            client_balance=(
+                Decimal(str(row["client_balance"]))
+                if row["client_balance"] is not None
+                else None
+            ),
+            client_precision=(
+                int(row["client_precision"])
+                if row["client_precision"] is not None
+                else None
+            ),
         )

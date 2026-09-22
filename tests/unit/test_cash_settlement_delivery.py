@@ -9,6 +9,7 @@ from services.accounting.cash_settlement_models import CashSettlementResult
 from services.wallets.models import ParsedCurrencyChange, WalletCommandResult
 from telegram_adapters import ChatLockRegistry
 from telegram_adapters.city_cash_transfer import (
+    send_cash_settlement_balance_to_client,
     send_cash_settlement_evidence_to_client,
 )
 
@@ -68,6 +69,7 @@ async def test_cash_request_command_sends_photo_and_names_client() -> None:
         id=999,
         send_photo=AsyncMock(),
         send_media_group=AsyncMock(),
+        send_message=AsyncMock(),
     )
     wallet_service = MagicMock()
     wallet_service.parse_currency_change.return_value = ParsedCurrencyChange(
@@ -99,6 +101,8 @@ async def test_cash_request_command_sends_photo_and_names_client() -> None:
                 client_transaction_id=9,
                 position_move_id=None,
                 repeated=False,
+                client_balance=Decimal("150000"),
+                client_precision=2,
             )
         )
     )
@@ -125,10 +129,35 @@ async def test_cash_request_command_sends_photo_and_names_client() -> None:
     await handler._execute_currency_change(message)
 
     bot.send_photo.assert_awaited_once_with(chat_id=-100500, photo="receipt")
+    bot.send_message.assert_awaited_once_with(
+        chat_id=-100500,
+        text="Запомнил. 100’000.00 rub\nБаланс: 150’000.00 rub",
+    )
     assert message.answer.await_args_list == [
         (("Заявка Б-2349823 проведена!\nКлиент: SkyEx | Клиент",), {}),
         (("Запомнил. 100’000.00 rub\nБаланс: 799’900.00 rub",), {}),
     ]
+
+
+async def test_send_cash_settlement_client_balance_for_withdrawal() -> None:
+    bot = SimpleNamespace(send_message=AsyncMock())
+
+    chat_id = await send_cash_settlement_balance_to_client(
+        repo=MagicMock(),
+        bot=bot,
+        target_chat_id=-100500,
+        target_client_id=42,
+        currency_code="RUB",
+        signed_amount=Decimal("-10000"),
+        balance=Decimal("90000"),
+        precision=2,
+    )
+
+    assert chat_id == -100500
+    bot.send_message.assert_awaited_once_with(
+        chat_id=-100500,
+        text="Запомнил. -10’000.00 rub\nБаланс: 90’000.00 rub",
+    )
 
 
 async def test_request_chat_accepts_regular_wallet_operation() -> None:
