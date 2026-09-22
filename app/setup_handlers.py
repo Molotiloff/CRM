@@ -373,7 +373,6 @@ def setup_handlers(
         chat_locks=ChatLockRegistry(),
         admin_chat_ids=admin_chat_list,
         admin_user_ids=admin_user_list,
-        request_chat_id=request_chat_id,
         ignore_chat_ids=None,
         silent_chat_ids=silent_accounting_chat_ids,
         city_cash_chats=city_cash_chats,

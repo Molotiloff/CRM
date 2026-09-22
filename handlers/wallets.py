@@ -47,7 +47,6 @@ class WalletsHandler:
         admin_chat_ids: Iterable[int] | None = None,
         admin_user_ids: Iterable[int] | None = None,
         *,
-        request_chat_id: int | None = None,
         ignore_chat_ids: Iterable[int] | None = None,
         silent_chat_ids: Iterable[int] | None = None,
         city_cash_chats: Mapping[str, int] | None = None,
@@ -56,7 +55,6 @@ class WalletsHandler:
         self.repo = repo
         self.admin_chat_ids = set(admin_chat_ids or [])
         self.admin_user_ids = set(admin_user_ids or [])
-        self.request_chat_id = int(request_chat_id) if request_chat_id is not None else None
         self.ignore_chat_ids = set(ignore_chat_ids or [])
         self.silent_chat_ids = set(silent_chat_ids or [])
         self.city_cash_chats = dict(city_cash_chats or {})
@@ -109,12 +107,6 @@ class WalletsHandler:
             return
 
         if message.chat and message.chat.id in self.ignore_chat_ids:
-            return
-
-        if self.request_chat_id is not None and int(message.chat.id) == self.request_chat_id:
-            await message.answer(
-                "В заявочном чате команды кошелька вида /usd, /usdt и т.д. недоступны."
-            )
             return
 
         if (

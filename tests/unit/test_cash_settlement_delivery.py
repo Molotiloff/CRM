@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 from handlers.wallets import WalletsHandler
 from services.accounting.cash_settlement_models import CashSettlementResult
-from services.wallets.models import ParsedCurrencyChange
+from services.wallets.models import ParsedCurrencyChange, WalletCommandResult
+from telegram_adapters import ChatLockRegistry
 from telegram_adapters.city_cash_transfer import (
     send_cash_settlement_evidence_to_client,
 )
@@ -125,3 +126,50 @@ async def test_cash_request_command_sends_photo_and_names_client() -> None:
     message.answer.assert_awaited_once_with(
         "✅ Заявка: Б-2349823 проведена\nКлиент: SkyEx | Клиент"
     )
+
+
+async def test_request_chat_accepts_regular_wallet_operation() -> None:
+    wallet_service = MagicMock()
+    wallet_service.parse_currency_change.return_value = ParsedCurrencyChange(
+        code="RUB",
+        expr="1000",
+        amount=Decimal("1000"),
+        tail="",
+        is_city_cash=False,
+        cash_city=None,
+        client_name_for_transfer="",
+        extra_comment="",
+    )
+    interaction = SimpleNamespace(
+        wallet_service=wallet_service,
+        build_currency_change_response=AsyncMock(
+            return_value=WalletCommandResult(
+                ok=True,
+                message_text="Запомнил. +1000 RUB",
+            )
+        ),
+    )
+    handler = WalletsHandler(
+        repo=MagicMock(),
+        interaction_service=interaction,
+        city_cash_media_store=MagicMock(),
+        chat_locks=ChatLockRegistry(),
+        admin_user_ids={77},
+    )
+    message = SimpleNamespace(
+        text="/руб 1000",
+        caption=None,
+        chat=SimpleNamespace(id=-777001, title="Чат заявок"),
+        message_id=501,
+        media_group_id=None,
+        photo=None,
+        reply_to_message=None,
+        from_user=SimpleNamespace(id=77),
+        bot=SimpleNamespace(id=999),
+        answer=AsyncMock(),
+    )
+
+    await handler._on_currency_change(message)
+
+    interaction.build_currency_change_response.assert_awaited_once()
+    message.answer.assert_awaited_once_with("Запомнил. +1000 RUB", reply_markup=None)
