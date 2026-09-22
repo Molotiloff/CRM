@@ -29,6 +29,8 @@ google-service-account*.json
 
 # Local data and internal project documents
 /scripts/*
+!/scripts/repairs/
+!/scripts/repairs/*.sql
 !/scripts/import_accounting_snapshot.py
 !/scripts/import_telegram_history.py
 !/scripts/benchmark_message_archive_export.py
