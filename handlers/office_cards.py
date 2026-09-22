@@ -87,7 +87,19 @@ class OfficeCardsHandler:
 
             if sent.photo:
                 fid = sent.photo[-1].file_id
-                log.debug("office_cards command=/%s file_id=%s", cmd, fid)
+                log.warning(
+                    "office_cards photo_file_id is not configured: "
+                    "command=/%s uploaded_photo_file_id=%s",
+                    cmd,
+                    fid,
+                )
+            else:
+                log.warning(
+                    "office_cards photo_file_id is not configured and Telegram "
+                    "returned no photo sizes: command=/%s image_path=%s",
+                    cmd,
+                    card.image_path,
+                )
             return
 
         # 3) если картинки нет — просто отправляем текст
