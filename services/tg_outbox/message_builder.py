@@ -8,7 +8,7 @@ from typing import Any
 
 from services.exchange.text_builder import ExchangeTextBuilder
 
-_STATUS_LINE_RE = re.compile(r"^<b>Статус CRM</b>:.*$", re.MULTILINE)
+_STATUS_LINE_RE = re.compile(r"^<b>Статус(?: CRM)?</b>:.*$", re.MULTILINE)
 
 STATUS_LABELS = {
     "new": "Новая",
@@ -21,6 +21,13 @@ STATUS_LABELS = {
     "canceled": "Сделка отменена",
 }
 
+CLIENT_STATUS_LABELS = {
+    **STATUS_LABELS,
+    "ready_for_cash_settlement": "Готово к расчету",
+    "done": "Проведена",
+    "canceled": "Отменена",
+}
+
 
 class TelegramDealMessageBuilder:
     @classmethod
@@ -30,10 +37,13 @@ class TelegramDealMessageBuilder:
         *,
         status: str,
         payload: Mapping[str, Any],
+        client_facing: bool = False,
     ) -> str:
         text = _STATUS_LINE_RE.sub("", base_text or "").rstrip()
-        detail = cls._detail(payload)
-        line = f"<b>Статус CRM</b>: <code>{html.escape(STATUS_LABELS.get(status, status))}</code>"
+        labels = CLIENT_STATUS_LABELS if client_facing else STATUS_LABELS
+        label = "Статус" if client_facing else "Статус CRM"
+        detail = None if client_facing else cls._detail(payload)
+        line = f"<b>{label}</b>: <code>{html.escape(labels.get(status, status))}</code>"
         if detail:
             line += f" — {detail}"
         marker = "\n----\n<b>Создал</b>"

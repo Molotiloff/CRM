@@ -55,7 +55,9 @@ class DealTelegramSyncService:
             ),
         )
         preserve_markup = status not in self.TERMINAL_STATUSES
-        for chat_id, message_id, base_text in self._card_targets(context, body):
+        for chat_id, message_id, base_text, client_facing in self._card_targets(
+            context, body
+        ):
             try:
                 await self._messenger.edit_text(
                     chat_id=chat_id,
@@ -64,6 +66,7 @@ class DealTelegramSyncService:
                         base_text,
                         status=status,
                         payload=event_payload,
+                        client_facing=client_facing,
                     ),
                     preserve_reply_markup=preserve_markup,
                 )
@@ -129,8 +132,8 @@ class DealTelegramSyncService:
         self,
         context: Mapping[str, Any],
         body: Mapping[str, Any],
-    ) -> list[tuple[int, int, str]]:
-        targets: list[tuple[int, int, str]] = []
+    ) -> list[tuple[int, int, str, bool]]:
+        targets: list[tuple[int, int, str, bool]] = []
         if context.get("source_kind") == "exchange":
             exchange_body = dict(body)
             exchange_body.setdefault("note", context.get("comment"))
@@ -140,12 +143,14 @@ class DealTelegramSyncService:
                 context.get("exchange_client_chat_id"),
                 context.get("exchange_client_message_id"),
                 client_base,
+                client_facing=True,
             )
             _append_target(
                 targets,
                 context.get("exchange_request_chat_id"),
                 context.get("exchange_request_message_id"),
                 context.get("exchange_request_text"),
+                client_facing=False,
             )
         elif context.get("source_kind") == "cash":
             _append_target(
@@ -153,27 +158,33 @@ class DealTelegramSyncService:
                 body.get("telegram_client_chat_id"),
                 body.get("telegram_client_message_id"),
                 body.get("telegram_client_text"),
+                client_facing=True,
             )
             _append_target(
                 targets,
                 context.get("cash_request_chat_id"),
                 context.get("cash_request_message_id"),
                 body.get("telegram_request_text"),
+                client_facing=False,
             )
         return list(dict.fromkeys(targets))
 
 
 def _append_target(
-    targets: list[tuple[int, int, str]],
+    targets: list[tuple[int, int, str, bool]],
     chat_id: object,
     message_id: object,
     text: object,
+    *,
+    client_facing: bool,
 ) -> None:
     parsed_chat_id = _int_or_none(chat_id)
     parsed_message_id = _int_or_none(message_id)
     base_text = str(text or "").strip()
     if parsed_chat_id is not None and parsed_message_id is not None and base_text:
-        targets.append((parsed_chat_id, parsed_message_id, base_text))
+        targets.append(
+            (parsed_chat_id, parsed_message_id, base_text, client_facing)
+        )
 
 
 def _int_or_none(value: object) -> int | None:

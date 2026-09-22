@@ -41,7 +41,11 @@ async def test_terminal_status_strips_card_keyboards() -> None:
 
     assert messenger.edits
     assert all(not edit.preserve_reply_markup for edit in messenger.edits)
-    assert all("Сделка завершена" in (edit.text or "") for edit in messenger.edits)
+    client_edit = next(edit for edit in messenger.edits if edit.chat_id == -100500)
+    request_edit = next(edit for edit in messenger.edits if edit.chat_id == -777001)
+    assert "<b>Статус</b>: <code>Проведена</code>" in (client_edit.text or "")
+    assert "Статус CRM" not in (client_edit.text or "")
+    assert "Сделка завершена" in (request_edit.text or "")
 
 
 @pytest.mark.asyncio
@@ -81,7 +85,32 @@ async def test_cash_completion_notification_contains_actual_receipt_amount() -> 
         )
     )
 
+    client_edit = next(edit for edit in messenger.edits if edit.chat_id == -100500)
+    request_edit = next(edit for edit in messenger.edits if edit.chat_id == -777101)
+    assert "<b>Статус</b>: <code>Проведена</code>" in (client_edit.text or "")
+    assert "Статус CRM" not in (client_edit.text or "")
+    assert "Фактически проведено" not in (client_edit.text or "")
+    assert "Фактически проведено" in (request_edit.text or "")
     assert "125 USD" in messenger.sent_to(-100500)[0].text
+
+
+@pytest.mark.asyncio
+async def test_cash_ready_status_is_short_in_client_card() -> None:
+    messenger = FakeMessenger()
+    service = DealTelegramSyncService(
+        repository=FakeCashDeliveryRepository(),
+        messenger=messenger,
+    )
+
+    await service.deliver(_item(status="ready_for_cash_settlement"))
+
+    client_edit = next(edit for edit in messenger.edits if edit.chat_id == -100500)
+    request_edit = next(edit for edit in messenger.edits if edit.chat_id == -777101)
+    assert "<b>Статус</b>: <code>Готово к расчету</code>" in (
+        client_edit.text or ""
+    )
+    assert "Статус CRM" not in (client_edit.text or "")
+    assert "Готово к расчету" in (request_edit.text or "")
 
 
 @pytest.mark.asyncio
