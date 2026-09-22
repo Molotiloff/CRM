@@ -301,6 +301,7 @@ class FulfillmentQueueRepositoryPort(Protocol):
         self,
         *,
         chat_id: int,
+        qty: Decimal | None = None,
     ) -> FulfillmentQueueItem | None: ...
 
     async def executing_qty(self) -> Decimal: ...

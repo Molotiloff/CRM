@@ -238,6 +238,7 @@ class FulfillmentQueueRepo(ConnectionBoundRepo):
         self,
         *,
         chat_id: int,
+        qty: Decimal | None = None,
     ) -> FulfillmentQueueItem | None:
         async with self._connection() as connection:
             row = await connection.fetchrow(
@@ -246,12 +247,15 @@ class FulfillmentQueueRepo(ConnectionBoundRepo):
                 FROM usdt_fulfillment_queue q
                 JOIN deals d ON d.id = q.deal_id
                 JOIN clients c ON c.id = d.client_id
-                WHERE c.chat_id = $1 AND q.status = 'queued'
+                WHERE c.chat_id = $1
+                  AND q.status = 'queued'
+                  AND ($2::numeric IS NULL OR q.qty = $2)
                 ORDER BY q.sequence_no, q.id
                 FOR UPDATE OF q SKIP LOCKED
                 LIMIT 1
                 """,
                 chat_id,
+                qty,
             )
         return self._item(row) if row is not None else None
 

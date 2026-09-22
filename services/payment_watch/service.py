@@ -98,6 +98,11 @@ class PaymentWatchService:
                         address=address,
                         our_address=our_address,
                         actor_tg_user_id=command.created_by_user_id,
+                        requested_qty=(
+                            Decimal(command.manager_note.replace(",", "."))
+                            if command.manager_note is not None
+                            else None
+                        ),
                         mode=mode,
                         phase=phase,
                         timeout_at=timeout_at,

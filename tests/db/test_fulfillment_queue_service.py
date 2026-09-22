@@ -11,7 +11,6 @@ from db_asyncpg.repositories.deals import DealRepository
 from db_asyncpg.repositories.exchange_requests import ExchangeRequestsRepo
 from db_asyncpg.uow import AsyncpgUnitOfWork
 from domain import DomainStateError, SettlementReviewStatus
-from domain.accounting_flows import SettlementResolution
 from services.accounting.firm_position_service import FirmPositionAccountingService
 from services.accounting.fulfillment_models import (
     EnqueueFulfillment,
@@ -23,10 +22,7 @@ from services.accounting.fulfillment_models import (
 from services.accounting.fulfillment_service import FulfillmentQueueService
 from services.accounting.models import RecordOpening
 from services.crm.deal_service import DealCreateCommand
-from services.payment_watch.settlement_models import (
-    ConfirmedTransfer,
-    ResolveSettlementCommand,
-)
+from services.payment_watch.settlement_models import ConfirmedTransfer
 from services.payment_watch.settlement_service import DealSettlementService
 
 
@@ -203,6 +199,49 @@ async def test_concurrent_starts_are_not_blocked_by_stale_wallet_fact(
     assert [item.status for item in await service.list_active()].count(
         FulfillmentStatus.EXECUTING
     ) == 2
+
+
+async def test_otpr_with_amount_selects_matching_queue_item_instead_of_fifo(
+    pool, client_id
+) -> None:
+    service = _service(pool)
+    stale_deal_id = await _deal(pool, client_id, suffix="stale-4137")
+    current_deal_id = await _deal(pool, client_id, suffix="current-2928")
+    stale = await service.enqueue(
+        EnqueueFulfillment(
+            deal_id=stale_deal_id,
+            request_kind=FulfillmentRequestKind.SALE,
+            qty=Decimal("4137"),
+        )
+    )
+    current = await service.enqueue(
+        EnqueueFulfillment(
+            deal_id=current_deal_id,
+            request_kind=FulfillmentRequestKind.SALE,
+            qty=Decimal("2928"),
+        )
+    )
+
+    started = await service.start_execution(
+        _start(
+            chat_id=-100500,
+            suffix="current-2928",
+            requested_qty=Decimal("2928"),
+        )
+    )
+
+    assert started.item.id == current.id
+    assert started.item.deal_id == current_deal_id
+    active = await service.list_active()
+    assert [(item.id, item.status) for item in active] == [
+        (stale.id, FulfillmentStatus.QUEUED),
+        (current.id, FulfillmentStatus.EXECUTING),
+    ]
+    async with pool.acquire() as connection:
+        assert await connection.fetchval(
+            "SELECT deal_id FROM payment_watches WHERE id = $1",
+            started.watch_id,
+        ) == current_deal_id
 
 
 async def test_confirmed_firm_wallet_execution_updates_fact_position_and_queue_atomically(
@@ -432,7 +471,7 @@ async def test_otpr_keeps_tg_actor_without_using_it_as_users_foreign_key(
         ) == tg_user_id
 
 
-async def test_client_withdrawal_mismatch_waits_for_review_before_accounting(
+async def test_client_withdrawal_accepts_actual_amount_without_review(
     pool, repo, client_id
 ) -> None:
     await repo.deposit(
@@ -450,7 +489,7 @@ async def test_client_withdrawal_mismatch_waits_for_review_before_accounting(
             currency="USDT",
             qty=Decimal("50"),
             rub_cost=Decimal("4500"),
-            reason="reviewed withdrawal position",
+            reason="unbounded withdrawal position",
             idempotency_key="reviewed-withdrawal-position",
         )
     )
@@ -463,12 +502,12 @@ async def test_client_withdrawal_mismatch_waits_for_review_before_accounting(
         fulfillment_queue_service=queue,
     )
 
-    pending = await settlement.settle(
+    result = await settlement.settle(
         ConfirmedTransfer(
             watch_id=started.watch_id,
             tx_hash="reviewed-withdrawal-event",
             direction="IN",
-            amount=Decimal("30"),
+            amount=Decimal("70"),
             token_symbol="USDT",
             confirmations=1,
             block_ts=datetime.now(UTC),
@@ -477,24 +516,17 @@ async def test_client_withdrawal_mismatch_waits_for_review_before_accounting(
         )
     )
 
-    assert pending.status is SettlementReviewStatus.NEEDS_REVIEW
-    assert await _client_usdt_balance(pool, client_id) == Decimal("40")
+    assert result.status is SettlementReviewStatus.MATCHED
+    assert result.expected == Decimal("70")
+    assert result.actual == Decimal("70")
+    assert await _client_usdt_balance(pool, client_id) == Decimal("-30")
     assert (await positions.position("USDT")).qty == Decimal("50")
     assert (await queue.summary()).usdt_fact == Decimal("50")
-
-    resolved = await settlement.resolve_review(
-        ResolveSettlementCommand(
-            settlement_id=pending.settlement_id,
-            resolution=SettlementResolution.ACCEPT_ACTUAL,
-            actor_user_id=await _actor_id(pool),
-        )
-    )
-
-    assert resolved.status is SettlementReviewStatus.RESOLVED
-    assert await _client_usdt_balance(pool, client_id) == Decimal("10")
-    assert (await positions.position("USDT")).qty == Decimal("20")
-    assert (await queue.summary()).usdt_fact == Decimal("20")
     assert await queue.list_active() == []
+    async with pool.acquire() as connection:
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM tg_outbox WHERE kind = 'settlement_needs_review'"
+        ) == 0
 
 
 def _service(pool) -> FulfillmentQueueService:
@@ -554,6 +586,7 @@ def _start(
     chat_id: int,
     suffix: str,
     actor_tg_user_id: int | None = None,
+    requested_qty: Decimal | None = None,
 ) -> StartFulfillmentExecution:
     return StartFulfillmentExecution(
         chat_id=chat_id,
@@ -562,6 +595,7 @@ def _start(
         address=f"TClient{suffix}",
         our_address="TOurAddress",
         actor_tg_user_id=actor_tg_user_id,
+        requested_qty=requested_qty,
         mode="SINGLE",
         phase="MAIN",
         timeout_at=datetime.now(UTC),

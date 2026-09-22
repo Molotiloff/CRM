@@ -57,6 +57,11 @@ class DealSettlementService:
                 if fulfillment is not None
                 else self._expected_quantity(context, transfer)
             )
+            accept_actual = (
+                fulfillment is not None
+                and fulfillment.request_kind
+                is FulfillmentRequestKind.CLIENT_WITHDRAWAL
+            )
             claim = await unit_of_work.settlements.claim_main_event(transfer)
             if not claim.created:
                 existing = await unit_of_work.settlements.get_by_event(
@@ -67,7 +72,10 @@ class DealSettlementService:
                 await unit_of_work.commit()
                 return existing
 
-            comparison = compare_settlement(expected=expected, actual=transfer.amount)
+            comparison = compare_settlement(
+                expected=transfer.amount if accept_actual else expected,
+                actual=transfer.amount,
+            )
             result = await unit_of_work.settlements.create(
                 context=context,
                 transfer=transfer,
@@ -105,6 +113,7 @@ class DealSettlementService:
                         actor_user_id=None,
                         client_id=context.client_id,
                         source_firm_wallet=transfer.direction == "IN",
+                        allow_quantity_mismatch=accept_actual,
                     )
             if (
                 comparison.status is SettlementReviewStatus.MATCHED

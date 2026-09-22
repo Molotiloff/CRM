@@ -80,7 +80,8 @@ class FulfillmentQueueService:
             currency = CurrencyCode("USDT")
             await unit_of_work.wallet_facts.acquire_fact_lock(currency)
             item = await unit_of_work.fulfillment_queue.next_for_client_for_update(
-                chat_id=command.chat_id
+                chat_id=command.chat_id,
+                qty=command.requested_qty,
             )
             if item is None:
                 raise FulfillmentQueueError("В очереди клиента нет заявки «На откупе».")
@@ -111,7 +112,8 @@ class FulfillmentQueueService:
         async with self._unit_of_work_factory() as unit_of_work:
             await unit_of_work.fulfillment_queue.acquire_client_lock(command.chat_id)
             existing = await unit_of_work.fulfillment_queue.next_for_client_for_update(
-                chat_id=command.chat_id
+                chat_id=command.chat_id,
+                qty=command.requested_qty,
             )
             if existing is not None:
                 await unit_of_work.commit()
@@ -121,7 +123,8 @@ class FulfillmentQueueService:
             )
             if context is None:
                 raise FulfillmentQueueError("Клиент не найден для постановки /отпр.")
-            if context.qty <= 0:
+            qty = command.requested_qty or context.qty
+            if qty <= 0:
                 raise FulfillmentQueueError("На USDT-балансе клиента нет средств для /отпр.")
             actor_user_id = (
                 await unit_of_work.fulfillment_queue.active_user_id_by_tg_user_id(
@@ -141,9 +144,9 @@ class FulfillmentQueueService:
                     body={
                         "request_kind": "client_withdrawal",
                         "recv_code": "USDT",
-                        "recv_amount": str(context.qty),
+                        "recv_amount": str(qty),
                         "pay_code": "USDT",
-                        "pay_amount": str(context.qty),
+                        "pay_amount": str(qty),
                         "telegram_client_chat_id": command.chat_id,
                         "telegram_reply_message_id": command.reply_message_id,
                     },
@@ -163,7 +166,7 @@ class FulfillmentQueueService:
                 EnqueueFulfillment(
                     deal_id=deal.id,
                     request_kind=FulfillmentRequestKind.CLIENT_WITHDRAWAL,
-                    qty=context.qty,
+                    qty=qty,
                     actor_user_id=actor_user_id,
                 )
             )
@@ -232,18 +235,32 @@ class FulfillmentQueueService:
                     snapshot.actual_qty if snapshot is not None else None,
                     qty,
                 )
-            position_move = await self._positions.record_sale(
-                RecordSale(
-                    currency=currency,
-                    qty=qty,
-                    deal_id=deal_id,
-                    actor_user_id=actor_user_id,
-                    effective_at=observed_at,
-                    idempotency_key=f"fulfillment:{item.id}:position_sale",
-                ),
-                unit_of_work=unit_of_work,
-            )
-            position_move_id = position_move.id
+            await unit_of_work.firm_positions.acquire_currency_lock(currency)
+            position = await unit_of_work.firm_positions.get_current(currency)
+            if (
+                item.request_kind is FulfillmentRequestKind.CLIENT_WITHDRAWAL
+                and qty > position.qty
+            ):
+                log.warning(
+                    "Skipping insufficient USDT position for client withdrawal %s: "
+                    "position=%s transfer=%s",
+                    item.id,
+                    position.qty,
+                    qty,
+                )
+            else:
+                position_move = await self._positions.record_sale(
+                    RecordSale(
+                        currency=currency,
+                        qty=qty,
+                        deal_id=deal_id,
+                        actor_user_id=actor_user_id,
+                        effective_at=observed_at,
+                        idempotency_key=f"fulfillment:{item.id}:position_sale",
+                    ),
+                    unit_of_work=unit_of_work,
+                )
+                position_move_id = position_move.id
             wallet_source = "firm_wallet"
         return await unit_of_work.fulfillment_queue.complete(
             item_id=item.id,

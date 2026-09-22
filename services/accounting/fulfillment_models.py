@@ -73,6 +73,7 @@ class StartFulfillmentExecution:
     address: str
     our_address: str
     actor_tg_user_id: int | None
+    requested_qty: Decimal | None
     mode: str
     phase: str
     timeout_at: datetime
