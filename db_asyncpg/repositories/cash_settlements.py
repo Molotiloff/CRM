@@ -105,11 +105,17 @@ class CashSettlementRepo(ConnectionBoundRepo):
                        settlement.request_id, settlement.request_kind,
                        settlement.currency_code, settlement.actual_qty,
                        settlement.cash_transaction_id,
+                       cash_account.balance AS cash_balance,
+                       cash_account.precision AS cash_precision,
                        settlement.client_transaction_id,
                        settlement.position_move_id
                 FROM cash_settlements settlement
                 JOIN deals deal ON deal.id = settlement.deal_id
                 JOIN clients client ON client.id = deal.client_id
+                JOIN transactions cash_transaction
+                  ON cash_transaction.id = settlement.cash_transaction_id
+                JOIN client_accounts cash_account
+                  ON cash_account.id = cash_transaction.account_id
                 WHERE settlement.request_id = $1
                 """,
                 request_id,
@@ -129,17 +135,27 @@ class CashSettlementRepo(ConnectionBoundRepo):
         async with self._connection() as connection:
             row = await connection.fetchrow(
                 """
-                INSERT INTO cash_settlements(
-                    deal_id, request_id, request_kind, city, currency_code,
-                    expected_qty, actual_qty, command_chat_id, command_message_id,
-                    cash_transaction_id, client_transaction_id, position_move_id,
-                    evidence, settled_by_tg_user_id
+                WITH inserted AS (
+                    INSERT INTO cash_settlements(
+                        deal_id, request_id, request_kind, city, currency_code,
+                        expected_qty, actual_qty, command_chat_id, command_message_id,
+                        cash_transaction_id, client_transaction_id, position_move_id,
+                        evidence, settled_by_tg_user_id
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                            $13::jsonb, $14)
+                    RETURNING id, deal_id, request_id, request_kind, currency_code,
+                              actual_qty, cash_transaction_id, client_transaction_id,
+                              position_move_id
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                        $13::jsonb, $14)
-                RETURNING id, deal_id, request_id, request_kind, currency_code,
-                          actual_qty, cash_transaction_id, client_transaction_id,
-                          position_move_id
+                SELECT inserted.*,
+                       cash_account.balance AS cash_balance,
+                       cash_account.precision AS cash_precision
+                FROM inserted
+                JOIN transactions cash_transaction
+                  ON cash_transaction.id = inserted.cash_transaction_id
+                JOIN client_accounts cash_account
+                  ON cash_account.id = cash_transaction.account_id
                 """,
                 context.deal_id,
                 context.request_id,
@@ -190,6 +206,8 @@ class CashSettlementRepo(ConnectionBoundRepo):
             currency=str(row["currency_code"]),
             actual_qty=Decimal(str(row["actual_qty"])),
             cash_transaction_id=int(row["cash_transaction_id"]),
+            cash_balance=Decimal(str(row["cash_balance"])),
+            cash_precision=int(row["cash_precision"]),
             client_transaction_id=(
                 int(row["client_transaction_id"])
                 if row["client_transaction_id"] is not None

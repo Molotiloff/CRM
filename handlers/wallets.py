@@ -16,6 +16,7 @@ from services.accounting.cash_settlement_service import (
     CashSettlementError,
     CashSettlementService,
 )
+from services.number_formatting import format_amount_core
 from services.wallets import WalletInteractionService
 from services.wallets.models import CurrencyChangeCommand
 from telegram_adapters import ChatLockRegistry, CityCashMediaStore
@@ -271,8 +272,22 @@ class WalletsHandler:
                     )
             await self._answer(
                 message,
-                f"✅ Заявка: {settled.request_id} проведена{suffix}\n"
+                f"Заявка {settled.request_id} проведена{suffix}!\n"
                 f"Клиент: {settled.client_name}{delivery_warning}",
+            )
+            signed_qty = (
+                settled.actual_qty
+                if settled.request_kind == "dep"
+                else -settled.actual_qty
+            )
+            await self._answer(
+                message,
+                "Запомнил. "
+                f"{format_amount_core(signed_qty, settled.cash_precision)} "
+                f"{settled.currency.lower()}\n"
+                "Баланс: "
+                f"{format_amount_core(settled.cash_balance, settled.cash_precision)} "
+                f"{settled.currency.lower()}",
             )
             return
         result = await self.interaction_service.build_currency_change_response(

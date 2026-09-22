@@ -46,6 +46,8 @@ class CashSettlementResult:
     currency: str
     actual_qty: Decimal
     cash_transaction_id: int
+    cash_balance: Decimal
+    cash_precision: int
     client_transaction_id: int | None
     position_move_id: int | None
     repeated: bool

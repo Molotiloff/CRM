@@ -94,6 +94,8 @@ async def test_cash_request_command_sends_photo_and_names_client() -> None:
                 currency="RUB",
                 actual_qty=Decimal("100000"),
                 cash_transaction_id=8,
+                cash_balance=Decimal("799900"),
+                cash_precision=2,
                 client_transaction_id=9,
                 position_move_id=None,
                 repeated=False,
@@ -123,9 +125,10 @@ async def test_cash_request_command_sends_photo_and_names_client() -> None:
     await handler._execute_currency_change(message)
 
     bot.send_photo.assert_awaited_once_with(chat_id=-100500, photo="receipt")
-    message.answer.assert_awaited_once_with(
-        "✅ Заявка: Б-2349823 проведена\nКлиент: SkyEx | Клиент"
-    )
+    assert message.answer.await_args_list == [
+        (("Заявка Б-2349823 проведена!\nКлиент: SkyEx | Клиент",), {}),
+        (("Запомнил. 100’000.00 rub\nБаланс: 799’900.00 rub",), {}),
+    ]
 
 
 async def test_request_chat_accepts_regular_wallet_operation() -> None:
