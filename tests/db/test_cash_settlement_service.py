@@ -43,6 +43,9 @@ async def test_office_deposit_updates_cash_and_client_without_position(
     result = await service.settle(_command("Б-100001", Decimal("1000")))
 
     assert result.deal_id == deal_id
+    assert result.client_id == client_id
+    assert result.client_chat_id == CLIENT_CHAT
+    assert result.client_name == "Тестовый чат"
     assert result.position_move_id is None
     assert await balance_of(repo, client_id, "USD") == Decimal("1000")
     assert await balance_of(repo, cash_client_id, "USD") == Decimal("1000")
@@ -148,6 +151,9 @@ async def test_duplicate_command_is_idempotent(pool, repo, client_id) -> None:
 
     assert repeated.settlement_id == first.settlement_id
     assert repeated.repeated is True
+    assert repeated.client_id == client_id
+    assert repeated.client_chat_id == CLIENT_CHAT
+    assert repeated.client_name == "Тестовый чат"
     assert await balance_of(repo, client_id, "USD") == Decimal("1000")
     assert await balance_of(repo, cash_client_id, "USD") == Decimal("1000")
 

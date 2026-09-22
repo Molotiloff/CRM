@@ -49,6 +49,8 @@ class CashSettlementRepo(ConnectionBoundRepo):
             row = await connection.fetchrow(
                 """
                 SELECT d.id AS deal_id, d.status AS deal_status, d.client_id,
+                       client.chat_id AS client_chat_id,
+                       client.name AS client_name,
                        d.city, d.body->>'req_id' AS request_id,
                        d.body->>'request_kind' AS request_kind,
                        UPPER(d.body->>'currency') AS currency_code,
@@ -78,6 +80,8 @@ class CashSettlementRepo(ConnectionBoundRepo):
             deal_id=int(row["deal_id"]),
             deal_status=DealStatus(str(row["deal_status"])),
             client_id=int(row["client_id"]),
+            client_chat_id=int(row["client_chat_id"]),
+            client_name=str(row["client_name"]),
             cash_client_id=int(row["cash_client_id"]),
             request_id=str(row["request_id"]),
             request_kind=str(row["request_kind"]),
@@ -95,11 +99,18 @@ class CashSettlementRepo(ConnectionBoundRepo):
         async with self._connection() as connection:
             row = await connection.fetchrow(
                 """
-                SELECT id, deal_id, request_id, request_kind, currency_code,
-                       actual_qty, cash_transaction_id, client_transaction_id,
-                       position_move_id
-                FROM cash_settlements
-                WHERE request_id = $1
+                SELECT settlement.id, settlement.deal_id,
+                       deal.client_id, client.chat_id AS client_chat_id,
+                       client.name AS client_name,
+                       settlement.request_id, settlement.request_kind,
+                       settlement.currency_code, settlement.actual_qty,
+                       settlement.cash_transaction_id,
+                       settlement.client_transaction_id,
+                       settlement.position_move_id
+                FROM cash_settlements settlement
+                JOIN deals deal ON deal.id = settlement.deal_id
+                JOIN clients client ON client.id = deal.client_id
+                WHERE settlement.request_id = $1
                 """,
                 request_id,
             )
@@ -145,13 +156,35 @@ class CashSettlementRepo(ConnectionBoundRepo):
                 json.dumps(command.evidence),
                 command.actor_tg_user_id,
             )
-        return self._result(row, repeated=False)
+        return self._result(
+            row,
+            repeated=False,
+            client_id=context.client_id,
+            client_chat_id=context.client_chat_id,
+            client_name=context.client_name,
+        )
 
     @staticmethod
-    def _result(row, *, repeated: bool) -> CashSettlementResult:
+    def _result(
+        row,
+        *,
+        repeated: bool,
+        client_id: int | None = None,
+        client_chat_id: int | None = None,
+        client_name: str | None = None,
+    ) -> CashSettlementResult:
         return CashSettlementResult(
             settlement_id=int(row["id"]),
             deal_id=int(row["deal_id"]),
+            client_id=(int(row["client_id"]) if client_id is None else client_id),
+            client_chat_id=(
+                int(row["client_chat_id"])
+                if client_chat_id is None
+                else client_chat_id
+            ),
+            client_name=(
+                str(row["client_name"]) if client_name is None else client_name
+            ),
             request_id=str(row["request_id"]),
             request_kind=str(row["request_kind"]),
             currency=str(row["currency_code"]),

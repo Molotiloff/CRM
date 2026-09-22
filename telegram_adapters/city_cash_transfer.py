@@ -81,6 +81,36 @@ async def _safe_send_with_migration(
         return new_chat_id
 
 
+async def send_cash_settlement_evidence_to_client(
+    *,
+    repo: ClientTransferRepositoryPort,
+    bot: Bot,
+    evidence_messages: list[Message],
+    target_chat_id: int,
+    target_client_id: int,
+) -> int:
+    """Send attached cash-settlement photos without changing client balances."""
+    photo_file_ids = _pick_photo_file_ids(evidence_messages)
+    if not photo_file_ids:
+        return target_chat_id
+
+    async def _send_evidence(chat_id: int):
+        if len(photo_file_ids) == 1:
+            return await bot.send_photo(chat_id=chat_id, photo=photo_file_ids[0])
+        return await bot.send_media_group(
+            chat_id=chat_id,
+            media=[InputMediaPhoto(media=file_id) for file_id in photo_file_ids],
+        )
+
+    return await _safe_send_with_migration(
+        repo=repo,
+        bot=bot,
+        target_chat_id=target_chat_id,
+        target_client_id=target_client_id,
+        send_coro_factory=_send_evidence,
+    )
+
+
 async def city_cash_transfer_to_client(
     *,
     repo: ClientTransferRepositoryPort,

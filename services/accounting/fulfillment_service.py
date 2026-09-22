@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from decimal import Decimal
 
@@ -20,12 +21,10 @@ from .fulfillment_models import (
     StartFulfillmentExecution,
 )
 
+log = logging.getLogger("fulfillment_queue")
+
 
 class FulfillmentQueueError(RuntimeError):
-    pass
-
-
-class FulfillmentShortageError(FulfillmentQueueError):
     pass
 
 
@@ -85,18 +84,6 @@ class FulfillmentQueueService:
             )
             if item is None:
                 raise FulfillmentQueueError("В очереди клиента нет заявки «На откупе».")
-            snapshot = await unit_of_work.wallet_facts.latest_snapshot(currency)
-            if snapshot is None:
-                raise FulfillmentShortageError(
-                    "USDT факт не зафиксирован; исходящее исполнение запрещено."
-                )
-            reserved = await unit_of_work.fulfillment_queue.executing_qty()
-            available = max(snapshot.actual_qty - reserved, Decimal(0))
-            if item.qty > available:
-                raise FulfillmentShortageError(
-                    f"Недостаточно USDT факт: доступно {available}, требуется {item.qty}. "
-                    "Заявка оставлена «На откупе»."
-                )
             watch_id = await unit_of_work.payment_watches.create_payment_watch(
                 chat_id=command.chat_id,
                 chat_name=command.chat_name,
@@ -220,21 +207,26 @@ class FulfillmentQueueService:
             currency = CurrencyCode("USDT")
             await unit_of_work.wallet_facts.acquire_fact_lock(currency)
             snapshot = await unit_of_work.wallet_facts.latest_snapshot(currency)
-            if snapshot is None or snapshot.actual_qty < qty:
-                raise FulfillmentShortageError(
-                    "Latest USDT fact is insufficient for confirmed fulfillment"
+            if snapshot is not None and snapshot.actual_qty >= qty:
+                updated_fact = snapshot.actual_qty - qty
+                await unit_of_work.wallet_facts.append_snapshot(
+                    currency=currency,
+                    actual_qty=updated_fact,
+                    observed_at=observed_at,
+                    source=WalletFactSource.PAYMENT_WATCH,
+                    address_id=snapshot.address_id,
+                    actor_user_id=actor_user_id,
+                    comment=f"confirmed fulfillment {item.id}",
+                    idempotency_key=f"fulfillment:{item.id}:wallet_fact",
                 )
-            updated_fact = snapshot.actual_qty - qty
-            await unit_of_work.wallet_facts.append_snapshot(
-                currency=currency,
-                actual_qty=updated_fact,
-                observed_at=observed_at,
-                source=WalletFactSource.PAYMENT_WATCH,
-                address_id=snapshot.address_id,
-                actor_user_id=actor_user_id,
-                comment=f"confirmed fulfillment {item.id}",
-                idempotency_key=f"fulfillment:{item.id}:wallet_fact",
-            )
+            else:
+                log.warning(
+                    "Skipping stale USDT wallet fact update for fulfillment %s: "
+                    "snapshot=%s transfer=%s",
+                    item.id,
+                    snapshot.actual_qty if snapshot is not None else None,
+                    qty,
+                )
             position_move = await self._positions.record_sale(
                 RecordSale(
                     currency=currency,

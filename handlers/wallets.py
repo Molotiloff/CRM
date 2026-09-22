@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections.abc import Iterable, Mapping
 
@@ -23,13 +24,17 @@ from telegram_adapters.auth import (
     manager_or_admin_message_required,
     require_manager_or_admin_message,
 )
-from telegram_adapters.city_cash_transfer import city_cash_transfer_to_client
+from telegram_adapters.city_cash_transfer import (
+    city_cash_transfer_to_client,
+    send_cash_settlement_evidence_to_client,
+)
 from telegram_adapters.errors import suppress_telegram_edit_errors
 from telegram_adapters.message_context import get_chat_name
 from telegram_adapters.statements import handle_stmt_callback
 
 _RE_PUBLIC_WALLET_CMD = r"(?iu)^/кош(?:@\w+)?(?:\s|$)"
-_RE_CASH_REQUEST_ID = re.compile(r"(?iu)^Б-\d{6}$")
+_RE_CASH_REQUEST_ID = re.compile(r"(?iu)^Б-\d+$")
+log = logging.getLogger("wallets")
 
 
 class WalletsHandler:
@@ -251,10 +256,31 @@ class WalletsHandler:
                 await self._answer(message, str(exc))
                 return
             suffix = " (повтор)" if settled.repeated else ""
+            delivery_warning = ""
+            if any(evidence_message.photo for evidence_message in evidence_messages):
+                try:
+                    await send_cash_settlement_evidence_to_client(
+                        repo=self.repo,
+                        bot=message.bot,
+                        evidence_messages=evidence_messages,
+                        target_chat_id=settled.client_chat_id,
+                        target_client_id=settled.client_id,
+                    )
+                except Exception:
+                    log.exception(
+                        "FAILED sending cash settlement evidence request_id=%s "
+                        "client_id=%s chat_id=%s",
+                        settled.request_id,
+                        settled.client_id,
+                        settled.client_chat_id,
+                    )
+                    delivery_warning = (
+                        "\n⚠️ Не удалось отправить фото в чат клиента."
+                    )
             await self._answer(
                 message,
-                f"✅ Заявка {settled.request_id} проведена: "
-                f"{settled.actual_qty} {settled.currency}{suffix}."
+                f"✅ Заявка: {settled.request_id} проведена{suffix}\n"
+                f"Клиент: {settled.client_name}{delivery_warning}",
             )
             return
         result = await self.interaction_service.build_currency_change_response(

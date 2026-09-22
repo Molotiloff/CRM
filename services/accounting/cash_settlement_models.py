@@ -23,6 +23,8 @@ class CashSettlementContext:
     deal_id: int
     deal_status: DealStatus
     client_id: int
+    client_chat_id: int
+    client_name: str
     cash_client_id: int
     request_id: str
     request_kind: str
@@ -36,6 +38,9 @@ class CashSettlementContext:
 class CashSettlementResult:
     settlement_id: int
     deal_id: int
+    client_id: int
+    client_chat_id: int
+    client_name: str
     request_id: str
     request_kind: str
     currency: str

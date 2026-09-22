@@ -20,10 +20,7 @@ from services.accounting.fulfillment_models import (
     ReorderFulfillment,
     StartFulfillmentExecution,
 )
-from services.accounting.fulfillment_service import (
-    FulfillmentQueueService,
-    FulfillmentShortageError,
-)
+from services.accounting.fulfillment_service import FulfillmentQueueService
 from services.accounting.models import RecordOpening
 from services.crm.deal_service import DealCreateCommand
 from services.payment_watch.settlement_models import (
@@ -150,7 +147,7 @@ async def test_pending_queue_only_affects_summary_not_fact_or_position(
     assert (await service.summary()).queued_qty == Decimal("0")
 
 
-async def test_shortage_keeps_item_queued_without_watch_or_accounting_moves(
+async def test_shortage_still_starts_tronscan_watch_without_accounting_moves(
     pool, client_id
 ) -> None:
     deal_id = await _deal(pool, client_id, suffix="shortage")
@@ -164,18 +161,20 @@ async def test_shortage_keeps_item_queued_without_watch_or_accounting_moves(
     )
     await _wallet_fact(pool, qty=Decimal("50"), key="shortage-fact")
 
-    with pytest.raises(FulfillmentShortageError, match="Недостаточно USDT факт"):
-        await service.start_execution(_start(chat_id=-100500, suffix="shortage"))
+    started = await service.start_execution(
+        _start(chat_id=-100500, suffix="shortage")
+    )
 
     active = await service.list_active()
     assert active[0].id == item.id
-    assert active[0].status is FulfillmentStatus.QUEUED
+    assert active[0].status is FulfillmentStatus.EXECUTING
+    assert started.watch_id > 0
     async with pool.acquire() as connection:
-        assert await connection.fetchval("SELECT COUNT(*) FROM payment_watches") == 0
+        assert await connection.fetchval("SELECT COUNT(*) FROM payment_watches") == 1
         assert await connection.fetchval("SELECT COUNT(*) FROM firm_position_moves") == 0
 
 
-async def test_concurrent_starts_reserve_fact_under_currency_lock(
+async def test_concurrent_starts_are_not_blocked_by_stale_wallet_fact(
     pool, repo, client_id
 ) -> None:
     second_client_id = await repo.ensure_client(chat_id=-100501, name="Second client")
@@ -200,11 +199,10 @@ async def test_concurrent_starts_reserve_fact_under_currency_lock(
         return_exceptions=True,
     )
 
-    assert sum(not isinstance(result, Exception) for result in results) == 1
-    assert sum(isinstance(result, FulfillmentShortageError) for result in results) == 1
+    assert all(not isinstance(result, Exception) for result in results)
     assert [item.status for item in await service.list_active()].count(
         FulfillmentStatus.EXECUTING
-    ) == 1
+    ) == 2
 
 
 async def test_confirmed_firm_wallet_execution_updates_fact_position_and_queue_atomically(
@@ -276,6 +274,69 @@ async def test_confirmed_firm_wallet_execution_updates_fact_position_and_queue_a
     assert item["payment_event_id"] == result.event_id
     assert item["position_move_id"] is not None
     assert item["wallet_source"] == "firm_wallet"
+
+
+async def test_confirmed_execution_ignores_stale_wallet_fact_without_overwriting_it(
+    pool, client_id
+) -> None:
+    deal_id = await _deal(pool, client_id, suffix="stale-fact")
+    async with pool.acquire() as connection:
+        await connection.execute(
+            "UPDATE deals SET status = 'awaiting_payment' WHERE id = $1",
+            deal_id,
+        )
+    queue = _service(pool)
+    await queue.enqueue(
+        EnqueueFulfillment(
+            deal_id=deal_id,
+            request_kind=FulfillmentRequestKind.SALE,
+            qty=Decimal("70"),
+        )
+    )
+    await _wallet_fact(pool, qty=Decimal("50"), key="stale-confirmed-fact")
+    positions = FirmPositionAccountingService(partial(AsyncpgUnitOfWork, pool))
+    await positions.record_opening(
+        RecordOpening(
+            currency="USDT",
+            qty=Decimal("100"),
+            rub_cost=Decimal("9000"),
+            reason="stale wallet fact position",
+            idempotency_key="stale-confirmed-position-opening",
+        )
+    )
+    started = await queue.start_execution(
+        _start(chat_id=-100500, suffix="stale-fact")
+    )
+    settlement = DealSettlementService(
+        partial(AsyncpgUnitOfWork, pool),
+        fulfillment_queue_service=queue,
+    )
+
+    result = await settlement.settle(
+        ConfirmedTransfer(
+            watch_id=started.watch_id,
+            tx_hash="stale-confirmed-event",
+            direction="IN",
+            amount=Decimal("70"),
+            token_symbol="USDT",
+            confirmations=1,
+            block_ts=datetime.now(UTC),
+            from_address="TOurAddress",
+            to_address="TClientAddress",
+        )
+    )
+
+    assert result.status is SettlementReviewStatus.MATCHED
+    assert await queue.list_active() == []
+    assert (await positions.position("USDT")).qty == Decimal("30")
+    assert (await queue.summary()).usdt_fact == Decimal("50")
+    async with pool.acquire() as connection:
+        assert await connection.fetchval(
+            """
+            SELECT COUNT(*) FROM firm_wallet_fact_snapshots
+            WHERE source = 'payment_watch'
+            """
+        ) == 0
 
 
 async def test_client_withdrawal_is_enqueued_by_otpr_and_debited_only_after_confirmation(
