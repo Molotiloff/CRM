@@ -97,7 +97,7 @@ class PaymentWatchService:
                         reply_message_id=command.reply_message_id,
                         address=address,
                         our_address=our_address,
-                        actor_user_id=command.created_by_user_id,
+                        actor_tg_user_id=command.created_by_user_id,
                         mode=mode,
                         phase=phase,
                         timeout_at=timeout_at,

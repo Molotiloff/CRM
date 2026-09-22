@@ -36,6 +36,10 @@ python main.py
 python main.py
 ```
 
+Полная инструкция для production-сервера с frontend, systemd, Nginx, HTTPS,
+Telegram OIDC, миграциями и проверками после запуска:
+[`deploy/PRODUCTION_DEPLOY.md`](deploy/PRODUCTION_DEPLOY.md).
+
 ## Архитектурные Проверки
 
 Текущие слои, dependency rules, composition root и транзакционные границы описаны в

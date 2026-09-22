@@ -90,7 +90,7 @@ class FulfillmentQueueService:
                 reply_message_id=command.reply_message_id,
                 address=command.address,
                 our_address=command.our_address,
-                created_by_user_id=command.actor_user_id,
+                created_by_user_id=command.actor_tg_user_id,
                 mode=command.mode,
                 phase=command.phase,
                 status="WATCHING",
@@ -123,6 +123,11 @@ class FulfillmentQueueService:
                 raise FulfillmentQueueError("Клиент не найден для постановки /отпр.")
             if context.qty <= 0:
                 raise FulfillmentQueueError("На USDT-балансе клиента нет средств для /отпр.")
+            actor_user_id = (
+                await unit_of_work.fulfillment_queue.active_user_id_by_tg_user_id(
+                    command.actor_tg_user_id
+                )
+            )
             source_ref = f"{command.chat_id}:{command.reply_message_id}"
             deal, _ = await unit_of_work.deals.create_deal_idempotent(
                 DealCreateCommand(
@@ -159,7 +164,7 @@ class FulfillmentQueueService:
                     deal_id=deal.id,
                     request_kind=FulfillmentRequestKind.CLIENT_WITHDRAWAL,
                     qty=context.qty,
-                    actor_user_id=command.actor_user_id,
+                    actor_user_id=actor_user_id,
                 )
             )
             await unit_of_work.commit()

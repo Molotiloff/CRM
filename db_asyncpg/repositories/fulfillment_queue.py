@@ -31,6 +31,19 @@ class FulfillmentQueueRepo(ConnectionBoundRepo):
                 f"usdt_fulfillment_client:{chat_id}",
             )
 
+    async def active_user_id_by_tg_user_id(
+        self,
+        tg_user_id: int | None,
+    ) -> int | None:
+        if tg_user_id is None:
+            return None
+        async with self._connection() as connection:
+            user_id = await connection.fetchval(
+                "SELECT id FROM users WHERE tg_user_id = $1 AND is_active",
+                tg_user_id,
+            )
+        return int(user_id) if user_id is not None else None
+
     async def client_withdrawal_context(
         self,
         *,

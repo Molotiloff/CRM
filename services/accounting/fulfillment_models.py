@@ -72,7 +72,7 @@ class StartFulfillmentExecution:
     reply_message_id: int
     address: str
     our_address: str
-    actor_user_id: int | None
+    actor_tg_user_id: int | None
     mode: str
     phase: str
     timeout_at: datetime

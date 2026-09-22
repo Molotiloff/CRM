@@ -401,6 +401,37 @@ async def test_client_withdrawal_is_enqueued_by_otpr_and_debited_only_after_conf
     assert deal["status"] == "done"
 
 
+async def test_otpr_keeps_tg_actor_without_using_it_as_users_foreign_key(
+    pool, repo, client_id
+) -> None:
+    tg_user_id = 1_015_722_286
+    await repo.deposit(
+        client_id=client_id,
+        currency_code="USDT",
+        amount=Decimal("40"),
+        comment="withdrawable client balance",
+        source="test",
+        idempotency_key="client-withdrawal-tg-actor-opening",
+    )
+    queue = _service(pool)
+
+    started = await queue.start_execution(
+        _start(
+            chat_id=-100500,
+            suffix="tg-actor",
+            actor_tg_user_id=tg_user_id,
+        )
+    )
+
+    assert started.item.status is FulfillmentStatus.EXECUTING
+    assert started.item.created_by is None
+    async with pool.acquire() as connection:
+        assert await connection.fetchval(
+            "SELECT created_by_user_id FROM payment_watches WHERE id = $1",
+            started.watch_id,
+        ) == tg_user_id
+
+
 async def test_client_withdrawal_mismatch_waits_for_review_before_accounting(
     pool, repo, client_id
 ) -> None:
@@ -518,14 +549,19 @@ async def _actor_id(pool) -> int:
         )
 
 
-def _start(*, chat_id: int, suffix: str) -> StartFulfillmentExecution:
+def _start(
+    *,
+    chat_id: int,
+    suffix: str,
+    actor_tg_user_id: int | None = None,
+) -> StartFulfillmentExecution:
     return StartFulfillmentExecution(
         chat_id=chat_id,
         chat_name=f"Client {suffix}",
         reply_message_id=abs(hash(suffix)) % 100000,
         address=f"TClient{suffix}",
         our_address="TOurAddress",
-        actor_user_id=None,
+        actor_tg_user_id=actor_tg_user_id,
         mode="SINGLE",
         phase="MAIN",
         timeout_at=datetime.now(UTC),

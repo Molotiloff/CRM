@@ -271,6 +271,11 @@ class AccountingDashboardReadPort(Protocol):
 class FulfillmentQueueRepositoryPort(Protocol):
     async def acquire_client_lock(self, chat_id: int) -> None: ...
 
+    async def active_user_id_by_tg_user_id(
+        self,
+        tg_user_id: int | None,
+    ) -> int | None: ...
+
     async def client_withdrawal_context(
         self,
         *,
