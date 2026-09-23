@@ -312,7 +312,6 @@ class ApplicationContainer:
         )
         fulfillment_queue = FulfillmentQueueService(
             unit_of_work_factory,
-            position_service=firm_positions,
             default_city=config.default_city,
         )
         accounting = AccountingServices(
