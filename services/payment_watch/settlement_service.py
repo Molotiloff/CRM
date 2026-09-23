@@ -57,11 +57,7 @@ class DealSettlementService:
                 if fulfillment is not None
                 else self._expected_quantity(context, transfer)
             )
-            accept_actual = (
-                fulfillment is not None
-                and fulfillment.request_kind
-                is FulfillmentRequestKind.CLIENT_WITHDRAWAL
-            )
+            accept_actual = fulfillment is not None
             claim = await unit_of_work.settlements.claim_main_event(transfer)
             if not claim.created:
                 existing = await unit_of_work.settlements.get_by_event(
@@ -84,6 +80,19 @@ class DealSettlementService:
                 actual=comparison.actual,
                 review_status=str(comparison.status),
             )
+            if (
+                accept_actual
+                and fulfillment.request_kind is FulfillmentRequestKind.SALE
+            ):
+                # The contractual USDT leg was posted when the deal was created.
+                # Reconcile only the difference to the confirmed transfer.
+                await self._apply_actual_delta(
+                    unit_of_work.transactions,
+                    context=context,
+                    transfer=transfer,
+                    delta=transfer.amount - expected,
+                    event_id=claim.event_id,
+                )
             if comparison.status is SettlementReviewStatus.NEEDS_REVIEW:
                 if (
                     fulfillment is None

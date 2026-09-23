@@ -296,8 +296,8 @@ async def test_confirmed_firm_wallet_execution_updates_fact_position_and_queue_a
     completed = (await queue.list_active())
     assert completed == []
     position = await positions.position("USDT")
-    assert position.qty == Decimal("30")
-    assert position.rub_cost == Decimal("2700")
+    assert position.qty == Decimal("100")
+    assert position.rub_cost == Decimal("9000")
     summary = await queue.summary()
     assert summary.queued_qty == Decimal("0")
     assert summary.usdt_fact == Decimal("30")
@@ -311,7 +311,7 @@ async def test_confirmed_firm_wallet_execution_updates_fact_position_and_queue_a
         )
     assert item["status"] == "completed"
     assert item["payment_event_id"] == result.event_id
-    assert item["position_move_id"] is not None
+    assert item["position_move_id"] is None
     assert item["wallet_source"] == "firm_wallet"
 
 
@@ -367,7 +367,7 @@ async def test_confirmed_execution_ignores_stale_wallet_fact_without_overwriting
 
     assert result.status is SettlementReviewStatus.MATCHED
     assert await queue.list_active() == []
-    assert (await positions.position("USDT")).qty == Decimal("30")
+    assert (await positions.position("USDT")).qty == Decimal("100")
     assert (await queue.summary()).usdt_fact == Decimal("50")
     async with pool.acquire() as connection:
         assert await connection.fetchval(
@@ -375,6 +375,82 @@ async def test_confirmed_execution_ignores_stale_wallet_fact_without_overwriting
             SELECT COUNT(*) FROM firm_wallet_fact_snapshots
             WHERE source = 'payment_watch'
             """
+        ) == 0
+
+
+@pytest.mark.parametrize("actual", [Decimal("60"), Decimal("80")])
+async def test_confirmed_sale_uses_actual_amount_despite_insufficient_firm_position(
+    pool, repo, client_id, actual: Decimal
+) -> None:
+    deal_id = await _deal(pool, client_id, suffix=f"unfunded-sale-{actual}")
+    async with pool.acquire() as connection:
+        await connection.execute(
+            "UPDATE deals SET status = 'awaiting_payment' WHERE id = $1",
+            deal_id,
+        )
+    await repo.withdraw(
+        client_id=client_id,
+        currency_code="USDT",
+        amount=Decimal("70"),
+        source="exchange",
+        idempotency_key=f"unfunded-sale:{actual}:contract",
+    )
+    await _wallet_fact(pool, qty=Decimal("50"), key=f"unfunded-sale-fact:{actual}")
+    queue = _service(pool)
+    await queue.enqueue(
+        EnqueueFulfillment(
+            deal_id=deal_id,
+            request_kind=FulfillmentRequestKind.SALE,
+            qty=Decimal("70"),
+        )
+    )
+    started = await queue.start_execution(
+        _start(chat_id=-100500, suffix=f"unfunded-sale-{actual}")
+    )
+    settlement = DealSettlementService(
+        partial(AsyncpgUnitOfWork, pool),
+        fulfillment_queue_service=queue,
+    )
+    transfer = ConfirmedTransfer(
+        watch_id=started.watch_id,
+        tx_hash=f"unfunded-sale-event-{actual}",
+        direction="IN",
+        amount=actual,
+        token_symbol="USDT",
+        confirmations=1,
+        block_ts=datetime.now(UTC),
+        from_address="TOurAddress",
+        to_address="TClientAddress",
+    )
+
+    result = await settlement.settle(transfer)
+    repeated = await settlement.settle(transfer)
+
+    assert result.status is SettlementReviewStatus.MATCHED
+    assert result.actual == actual
+    assert repeated.created is False
+    assert await _client_usdt_balance(pool, client_id) == -actual
+    assert await queue.list_active() == []
+    async with pool.acquire() as connection:
+        item = await connection.fetchrow(
+            """
+            SELECT status, payment_event_id, position_move_id, wallet_source
+            FROM usdt_fulfillment_queue WHERE deal_id = $1
+            """,
+            deal_id,
+        )
+        assert item["status"] == "completed"
+        assert item["payment_event_id"] == result.event_id
+        assert item["position_move_id"] is None
+        assert item["wallet_source"] == "firm_wallet"
+        assert await connection.fetchval(
+            "SELECT status FROM deals WHERE id = $1", deal_id
+        ) == "done"
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM firm_wallet_fact_snapshots WHERE source = 'payment_watch'"
+        ) == 0
+        assert await connection.fetchval(
+            "SELECT COUNT(*) FROM tg_outbox WHERE kind = 'settlement_needs_review'"
         ) == 0
 
 
@@ -429,7 +505,7 @@ async def test_client_withdrawal_is_enqueued_by_otpr_and_debited_only_after_conf
 
     assert result.status is SettlementReviewStatus.MATCHED
     assert await _client_usdt_balance(pool, client_id) == Decimal("0")
-    assert (await positions.position("USDT")).qty == Decimal("10")
+    assert (await positions.position("USDT")).qty == Decimal("50")
     assert (await queue.summary()).usdt_fact == Decimal("10")
     async with pool.acquire() as connection:
         deal = await connection.fetchrow(

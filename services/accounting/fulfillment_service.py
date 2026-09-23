@@ -5,8 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from domain import CurrencyCode, DealStatus, DomainStateError
-from services.accounting.firm_position_service import FirmPositionAccountingService
-from services.accounting.models import RecordSale, WalletFactSource
+from services.accounting.models import WalletFactSource
 from services.crm.deal_service import DealCreateCommand, DealStatusCommand
 from services.unit_of_work import UnitOfWorkFactory, UnitOfWorkPort
 
@@ -33,13 +32,9 @@ class FulfillmentQueueService:
         self,
         unit_of_work_factory: UnitOfWorkFactory,
         *,
-        position_service: FirmPositionAccountingService | None = None,
         default_city: str = "екб",
     ) -> None:
         self._unit_of_work_factory = unit_of_work_factory
-        self._positions = position_service or FirmPositionAccountingService(
-            unit_of_work_factory
-        )
         self._default_city = default_city
 
     async def enqueue(self, command: EnqueueFulfillment) -> FulfillmentQueueItem:
@@ -77,8 +72,6 @@ class FulfillmentQueueService:
     ) -> FulfillmentExecutionStarted:
         await self._ensure_client_withdrawal(command)
         async with self._unit_of_work_factory() as unit_of_work:
-            currency = CurrencyCode("USDT")
-            await unit_of_work.wallet_facts.acquire_fact_lock(currency)
             item = await unit_of_work.fulfillment_queue.next_for_client_for_update(
                 chat_id=command.chat_id,
                 qty=command.requested_qty,
@@ -209,7 +202,6 @@ class FulfillmentQueueService:
                 idempotency_key=f"fulfillment:{item.id}:client_withdrawal",
             )
 
-        position_move_id = None
         wallet_source = "external"
         if source_firm_wallet:
             currency = CurrencyCode("USDT")
@@ -235,37 +227,11 @@ class FulfillmentQueueService:
                     snapshot.actual_qty if snapshot is not None else None,
                     qty,
                 )
-            await unit_of_work.firm_positions.acquire_currency_lock(currency)
-            position = await unit_of_work.firm_positions.get_current(currency)
-            if (
-                item.request_kind is FulfillmentRequestKind.CLIENT_WITHDRAWAL
-                and qty > position.qty
-            ):
-                log.warning(
-                    "Skipping insufficient USDT position for client withdrawal %s: "
-                    "position=%s transfer=%s",
-                    item.id,
-                    position.qty,
-                    qty,
-                )
-            else:
-                position_move = await self._positions.record_sale(
-                    RecordSale(
-                        currency=currency,
-                        qty=qty,
-                        deal_id=deal_id,
-                        actor_user_id=actor_user_id,
-                        effective_at=observed_at,
-                        idempotency_key=f"fulfillment:{item.id}:position_sale",
-                    ),
-                    unit_of_work=unit_of_work,
-                )
-                position_move_id = position_move.id
             wallet_source = "firm_wallet"
         return await unit_of_work.fulfillment_queue.complete(
             item_id=item.id,
             payment_event_id=payment_event_id,
-            position_move_id=position_move_id,
+            position_move_id=None,
             actor_user_id=actor_user_id,
             wallet_source=wallet_source,
         )
