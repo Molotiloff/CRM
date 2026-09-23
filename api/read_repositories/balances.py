@@ -23,9 +23,9 @@ class BalanceReadRepository(ConnectionBoundRepo):
                     a.currency_code, a.balance, a.precision
                 FROM client_accounts a
                 JOIN clients c ON c.id = a.client_id
-                WHERE c.is_active
-                  AND a.is_active
+                WHERE a.is_active
                   AND a.balance <> 0
+                  AND COALESCE(c.client_group, '') <> 'internal_wallet'
                   AND NOT EXISTS (
                       SELECT 1
                       FROM cash_chat_registry cash

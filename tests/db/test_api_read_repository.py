@@ -57,3 +57,23 @@ async def test_crm_read_repository_uses_latest_rub_rate_for_nonzero_balances(
 
     assert rows[0]["client_id"] == client_id
     assert rates["USDT"] == Decimal("80.00000000")
+
+
+@pytest.mark.asyncio
+async def test_balance_read_repository_excludes_internal_wallets(pool, repo) -> None:
+    client_id = await repo.ensure_client(chat_id=-1003, name="Client balance")
+    internal_id = await repo.ensure_client(
+        chat_id=-1004, name="Operations wallet", client_group="internal_wallet"
+    )
+    for account_client_id in (client_id, internal_id):
+        await repo.add_currency(account_client_id, "USDT", 2)
+        await repo.deposit(
+            client_id=account_client_id,
+            currency_code="USDT",
+            amount=10,
+            source="test",
+        )
+
+    rows = await BalanceReadRepository(pool).nonzero_balances(currency="USDT")
+
+    assert [row["client_id"] for row in rows] == [client_id]
