@@ -216,8 +216,8 @@ def test_dashboard_rates_route_returns_numeric_rates() -> None:
     assert rates == {"RUB": 1.0, "USDT": 81.0}
 
 
-def test_dashboard_shadow_report_returns_accountant_diagnostics() -> None:
-    app = _app()
+def test_dashboard_shadow_report_returns_manager_diagnostics() -> None:
+    app = _app(role=UserRole.manager)
     app.state.dashboard_queries = DashboardQueryService(
         dashboard_repository=FakeReadRepository(),
         rate_provider=FakeRateProvider(),
@@ -232,6 +232,14 @@ def test_dashboard_shadow_report_returns_accountant_diagnostics() -> None:
     assert report.differences[0].path == "reconciliation.total_rub"
     assert report.differences[0].sheet == "100"
     assert report.differences[0].database == "110"
+
+
+def test_dashboard_shadow_report_rejects_cashier_access() -> None:
+    response = TestClient(_app(role=UserRole.cashier)).get(
+        "/api/v1/dashboard/shadow-reports/77"
+    )
+
+    assert response.status_code == 403
 
 
 def test_dashboard_shadow_report_returns_not_found() -> None:

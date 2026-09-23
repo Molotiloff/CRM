@@ -42,7 +42,7 @@ async def dashboard(
 )
 async def dashboard_shadow_report(
     report_id: int,
-    _: ApiUser = Depends(require_role(UserRole.accountant)),
+    _: ApiUser = Depends(require_role(UserRole.manager)),
     queries: DashboardQueryService = Depends(get_dashboard_queries),
 ) -> DashboardShadowReportDto:
     report = await queries.get_shadow_report(report_id)

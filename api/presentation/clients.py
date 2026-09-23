@@ -127,7 +127,7 @@ def _client_dto(
         telegramChatId=str(client["chat_id"]),
         dealsCount=deals_count,
         turnoverRub=float_value(turnover_rub),
-        managerName="Telegram bot",
+        managerName="—",
         registrationDate=_date(client.get("created_at")),
         comment=str(client["client_group"]) if client.get("client_group") else None,
         balances=[
