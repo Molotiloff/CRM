@@ -33,9 +33,14 @@ class StartWatchRepoStub:
     ) -> None:
         return None
 
-    async def create_payment_watch(self, **kwargs: object) -> int:
-        self.created = kwargs
-        return 42
+
+class ClientWithdrawalStub:
+    def __init__(self) -> None:
+        self.command = None
+
+    async def start_client_withdrawal(self, command):
+        self.command = command
+        return type("Started", (), {"watch_id": 42})()
 
 
 class TronscanGatewayStub:
@@ -45,9 +50,11 @@ class TronscanGatewayStub:
 
 async def test_start_watch_uses_transport_neutral_command() -> None:
     repo = StartWatchRepoStub()
+    withdrawal = ClientWithdrawalStub()
     service = PaymentWatchService(
         repo=repo,
         tronscan_gateway=TronscanGatewayStub(),
+        fulfillment_queue_service=withdrawal,
     )
 
     started = await service.start_watch(
@@ -60,16 +67,18 @@ async def test_start_watch_uses_transport_neutral_command() -> None:
             created_by_user_id=300,
             test_mode=True,
             manager_note="10000",
+            command_message_id=201,
         )
     )
 
     assert started.watch_id == 42
     assert TRON_ADDRESS in started.message_text
-    assert repo.created is not None
-    assert repo.created["chat_id"] == 100
-    assert repo.created["reply_message_id"] == 200
-    assert repo.created["mode"] == "TEST_THEN_MAIN"
-    assert repo.created["phase"] == "TEST"
+    assert withdrawal.command.chat_id == 100
+    assert withdrawal.command.reply_message_id == 200
+    assert withdrawal.command.command_message_id == 201
+    assert withdrawal.command.requested_qty == Decimal("10000")
+    assert withdrawal.command.mode == "TEST_THEN_MAIN"
+    assert withdrawal.command.phase == "TEST"
 
 
 def test_extract_tron_address_accepts_text_or_caption() -> None:
@@ -155,9 +164,27 @@ class TransferGatewayStub(TronscanGatewayStub):
         ]
 
 
+class ReverseTransferGatewayStub(TronscanGatewayStub):
+    async def list_usdt_transfers(self, **_: object) -> list[TronTransfer]:
+        return [
+            TronTransfer(
+                tx_hash="reverse-transfer",
+                from_address=TRON_ADDRESS,
+                to_address=OUR_ADDRESS,
+                amount=Decimal("100"),
+                token_symbol="USDT",
+                block_number=1,
+                block_ts=datetime.now(UTC),
+                confirmations=1,
+                confirmed=True,
+            )
+        ]
+
+
 class SettlementServiceStub:
-    def __init__(self) -> None:
+    def __init__(self, *, wallet_amount: Decimal | None = None) -> None:
         self.committed = False
+        self.wallet_amount = wallet_amount
 
     async def settle(self, transfer) -> SettlementResult:
         self.committed = True
@@ -171,6 +198,9 @@ class SettlementServiceStub:
             status=SettlementReviewStatus.MATCHED,
             created=True,
             evidence=transfer,
+            client_wallet_amount=self.wallet_amount,
+            client_wallet_balance_after=Decimal("42.15") if self.wallet_amount is not None else None,
+            client_wallet_precision=2 if self.wallet_amount is not None else None,
         )
 
 
@@ -207,3 +237,61 @@ async def test_main_receipt_is_built_only_after_settlement_commit() -> None:
     )
 
     assert notifications[0].photo_bytes == b"receipt"
+
+
+async def test_otpr_sends_balance_as_separate_message_after_receipt() -> None:
+    settlement = SettlementServiceStub(wallet_amount=Decimal("-190"))
+    service = PaymentWatchService(
+        repo=PollRepoStub(),
+        tronscan_gateway=TransferGatewayStub(),
+        settlement_service=settlement,
+    )
+    service.receipt_builder = ReceiptBuilderStub(settlement)
+
+    notifications = await service._process_watch(
+        {
+            "id": 10,
+            "address": TRON_ADDRESS,
+            "our_address": OUR_ADDRESS,
+            "phase": "MAIN",
+            "mode": "SINGLE",
+            "started_at": datetime.now(UTC),
+            "chat_id": 20,
+            "reply_message_id": 30,
+            "notice_message_id": None,
+        }
+    )
+
+    assert len(notifications) == 2
+    assert notifications[0].photo_bytes == b"receipt"
+    assert notifications[1].photo_bytes is None
+    assert notifications[1].reply_message_id is None
+    assert notifications[1].text == "Запомнил. -190.00\nБаланс: 42.15 usdt"
+
+
+async def test_otpr_processes_reverse_transfer_as_incoming() -> None:
+    settlement = SettlementServiceStub(wallet_amount=Decimal("190"))
+    service = PaymentWatchService(
+        repo=PollRepoStub(),
+        tronscan_gateway=ReverseTransferGatewayStub(),
+        settlement_service=settlement,
+    )
+
+    notifications = await service._process_watch(
+        {
+            "id": 10,
+            "address": TRON_ADDRESS,
+            "our_address": OUR_ADDRESS,
+            "phase": "MAIN",
+            "mode": "SINGLE",
+            "started_at": datetime.now(UTC),
+            "chat_id": 20,
+            "reply_message_id": 30,
+            "notice_message_id": None,
+        }
+    )
+
+    assert len(notifications) == 2
+    assert settlement.committed is True
+    assert "Средства получены" in notifications[0].text
+    assert notifications[1].text == "Запомнил. +190.00\nБаланс: 42.15 usdt"

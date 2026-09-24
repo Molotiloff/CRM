@@ -33,6 +33,7 @@ class SettlementContext:
     recv_amount: Decimal
     pay_code: str
     pay_amount: Decimal
+    source_kind: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +55,9 @@ class SettlementResult:
     created: bool
     resolution: SettlementResolution | None = None
     evidence: ConfirmedTransfer | None = None
+    client_wallet_amount: Decimal | None = None
+    client_wallet_balance_after: Decimal | None = None
+    client_wallet_precision: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

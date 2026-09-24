@@ -63,6 +63,7 @@ class PaymentWatchHandler:
                     created_by_user_id=(message.from_user.id if message.from_user else None),
                     test_mode=test_mode,
                     manager_note=manager_note,
+                    command_message_id=message.message_id,
                 )
             )
         except PaymentWatchError as exc:

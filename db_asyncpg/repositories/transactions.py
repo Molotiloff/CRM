@@ -102,9 +102,11 @@ class TransactionsRepo(BaseRepo):
         async with self._connection() as con:
             row = await con.fetchrow(
                 """
-                SELECT id, client_id, account_id, amount, balance_after, txn_at
-                FROM transactions
-                WHERE client_id = $1 AND idempotency_key = $2
+                SELECT t.id, t.client_id, t.account_id, t.amount,
+                       t.balance_after, t.txn_at, a.precision
+                FROM transactions AS t
+                JOIN client_accounts AS a ON a.id = t.account_id
+                WHERE t.client_id = $1 AND t.idempotency_key = $2
                 LIMIT 1
                 """,
                 client_id,

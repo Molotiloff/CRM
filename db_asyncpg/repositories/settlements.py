@@ -26,6 +26,7 @@ class DealSettlementRepo(ConnectionBoundRepo):
             row = await con.fetchrow(
                 """
                 SELECT d.id AS deal_id, d.status AS deal_status, d.client_id,
+                       d.source_kind,
                        c.chat_id AS client_chat_id, erl.request_chat_id,
                        d.body->>'recv_code' AS recv_code,
                        d.body->>'recv_amount' AS recv_amount,
@@ -57,6 +58,7 @@ class DealSettlementRepo(ConnectionBoundRepo):
             recv_amount=Decimal(str(row["recv_amount"])),
             pay_code=str(row["pay_code"] or "").upper(),
             pay_amount=Decimal(str(row["pay_amount"])),
+            source_kind=row["source_kind"],
         )
 
     async def claim_main_event(self, transfer: ConfirmedTransfer) -> PaymentEventClaim:

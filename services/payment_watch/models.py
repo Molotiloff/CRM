@@ -44,6 +44,7 @@ class StartPaymentWatchCommand:
     created_by_user_id: int | None
     test_mode: bool
     manager_note: str | None = None
+    command_message_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

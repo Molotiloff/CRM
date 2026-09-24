@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 
 from domain import DealStatus, SettlementReviewStatus, compare_settlement
@@ -41,6 +42,51 @@ class DealSettlementService:
         self._unit_of_work_factory = unit_of_work_factory
         self._fulfillment = fulfillment_queue_service
 
+    async def settle_test(self, transfer: ConfirmedTransfer) -> None:
+        """Account for the outgoing test payment without completing the watch."""
+        async with self._unit_of_work_factory() as unit_of_work:
+            context = await unit_of_work.settlements.get_context_for_update(
+                watch_id=transfer.watch_id
+            )
+            if context is None or context.source_kind != "fulfillment":
+                raise SettlementError("Test payment is not linked to a client withdrawal")
+            fulfillment = await unit_of_work.fulfillment_queue.get_by_deal_for_update(
+                deal_id=context.deal_id
+            )
+            if (
+                fulfillment is None
+                or fulfillment.request_kind is not FulfillmentRequestKind.CLIENT_WITHDRAWAL
+            ):
+                raise SettlementError("Test payment has no client withdrawal")
+            event_id = await unit_of_work.payment_watches.add_payment_watch_event(
+                watch_id=transfer.watch_id,
+                tx_hash=transfer.tx_hash,
+                event_type="TEST",
+                direction=transfer.direction,
+                amount=transfer.amount,
+                token_symbol=transfer.token_symbol,
+                confirmations=transfer.confirmations,
+                block_ts=transfer.block_ts,
+            )
+            operation = (
+                unit_of_work.transactions.withdraw
+                if transfer.direction == "IN"
+                else unit_of_work.transactions.deposit
+            )
+            await operation(
+                client_id=context.client_id,
+                currency_code="USDT",
+                amount=transfer.amount,
+                comment=f"confirmed test transfer for deal {context.deal_id}",
+                source="payment_watch",
+                idempotency_key=f"payment_watch:test:{event_id}",
+            )
+            await unit_of_work.payment_watches.set_payment_watch_phase(
+                watch_id=transfer.watch_id,
+                phase="MAIN",
+            )
+            await unit_of_work.commit()
+
     async def settle(self, transfer: ConfirmedTransfer) -> SettlementResult:
         async with self._unit_of_work_factory() as unit_of_work:
             context = await unit_of_work.settlements.get_context_for_update(
@@ -52,6 +98,12 @@ class DealSettlementService:
             fulfillment = await unit_of_work.fulfillment_queue.get_by_deal_for_update(
                 deal_id=context.deal_id
             )
+            if context.source_kind == "fulfillment" and (
+                self._fulfillment is None
+                or fulfillment is None
+                or fulfillment.request_kind is not FulfillmentRequestKind.CLIENT_WITHDRAWAL
+            ):
+                raise SettlementError("Client withdrawal has no accounting fulfillment")
             expected = (
                 fulfillment.qty
                 if fulfillment is not None
@@ -65,6 +117,11 @@ class DealSettlementService:
                 )
                 if existing is None:
                     raise SettlementError("Claimed payment event has no settlement")
+                if fulfillment is not None and fulfillment.request_kind is FulfillmentRequestKind.CLIENT_WITHDRAWAL:
+                    existing = await self._with_client_wallet_transaction(
+                        unit_of_work, existing, client_id=context.client_id,
+                        fulfillment_id=fulfillment.id,
+                    )
                 await unit_of_work.commit()
                 return existing
 
@@ -121,8 +178,13 @@ class DealSettlementService:
                         observed_at=transfer.block_ts,
                         actor_user_id=None,
                         client_id=context.client_id,
-                        source_firm_wallet=transfer.direction == "IN",
+                        transfer_direction=transfer.direction,
                         allow_quantity_mismatch=accept_actual,
+                    )
+                if fulfillment is not None and fulfillment.request_kind is FulfillmentRequestKind.CLIENT_WITHDRAWAL:
+                    result = await self._with_client_wallet_transaction(
+                        unit_of_work, result, client_id=context.client_id,
+                        fulfillment_id=fulfillment.id,
                     )
             if (
                 comparison.status is SettlementReviewStatus.MATCHED
@@ -150,6 +212,27 @@ class DealSettlementService:
             await unit_of_work.settlements.complete_watch(watch_id=transfer.watch_id)
             await unit_of_work.commit()
             return result
+
+    @staticmethod
+    async def _with_client_wallet_transaction(
+        unit_of_work,
+        result: SettlementResult,
+        *,
+        client_id: int,
+        fulfillment_id: int,
+    ) -> SettlementResult:
+        transaction = await unit_of_work.transactions.get_transaction_by_idempotency_key(
+            client_id=client_id,
+            idempotency_key=f"fulfillment:{fulfillment_id}:client_withdrawal",
+        )
+        if transaction is None:
+            raise SettlementError("Confirmed client transfer has no wallet transaction")
+        return replace(
+            result,
+            client_wallet_amount=Decimal(transaction["amount"]),
+            client_wallet_balance_after=Decimal(transaction["balance_after"]),
+            client_wallet_precision=int(transaction["precision"] or 2),
+        )
 
     async def resolve_review(self, command: ResolveSettlementCommand) -> SettlementResult:
         async with self._unit_of_work_factory() as unit_of_work:
@@ -219,7 +302,7 @@ class DealSettlementService:
                 observed_at=evidence.block_ts,
                 actor_user_id=command.actor_user_id,
                 client_id=context.client_id,
-                source_firm_wallet=evidence.direction == "IN",
+                transfer_direction=evidence.direction,
                 allow_quantity_mismatch=True,
             )
         changed = await unit_of_work.deals.change_status(

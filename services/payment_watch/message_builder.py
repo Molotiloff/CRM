@@ -65,10 +65,12 @@ class PaymentWatchMessageBuilder:
         *,
         amount: Decimal,
         tx_hash: str,
+        direction: str = "IN",
     ) -> str:
         tx_url = f"https://tronscan.org/#/transaction/{html.escape(tx_hash, quote=True)}"
+        action = "получены" if direction == "OUT" else "переведены"
         return (
-            "🚀 Средства переведены:\n"
+            f"🚀 Средства {action}:\n"
             f"💸 <code>{_fmt(amount)} USDT</code>\n"
             f"🔗 <a href=\"{tx_url}\">Ссылка на Tronscan</a>"
         )

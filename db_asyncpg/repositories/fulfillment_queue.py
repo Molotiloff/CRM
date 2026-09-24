@@ -52,16 +52,12 @@ class FulfillmentQueueRepo(ConnectionBoundRepo):
         async with self._connection() as connection:
             row = await connection.fetchrow(
                 """
-                SELECT c.id AS client_id,
-                       COALESCE((
-                           SELECT t.balance_after
-                           FROM client_accounts a
-                           JOIN transactions t ON t.account_id = a.id
-                           WHERE a.client_id = c.id AND a.currency_code = 'USDT'
-                           ORDER BY t.id DESC
-                           LIMIT 1
-                       ), 0) AS qty
+                SELECT c.id AS client_id, COALESCE(a.balance, 0) AS qty
                 FROM clients c
+                LEFT JOIN client_accounts a
+                  ON a.client_id = c.id
+                 AND a.currency_code = 'USDT'
+                 AND a.is_active
                 WHERE c.chat_id = $1
                 """,
                 chat_id,
@@ -74,8 +70,11 @@ class FulfillmentQueueRepo(ConnectionBoundRepo):
         )
 
     async def enqueue(self, command: EnqueueFulfillment) -> FulfillmentQueueItem:
-        if command.qty <= 0:
-            raise DomainValidationError("Fulfillment quantity must be greater than zero")
+        if command.qty < 0 or (
+            command.qty == 0
+            and command.request_kind is not FulfillmentRequestKind.CLIENT_WITHDRAWAL
+        ):
+            raise DomainValidationError("Fulfillment quantity must be nonnegative for withdrawal")
         async with self._connection() as connection:
             await self._acquire_order_lock(connection)
             existing = await connection.fetchrow(

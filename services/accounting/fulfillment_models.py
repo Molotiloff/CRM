@@ -8,6 +8,7 @@ from enum import StrEnum
 
 class FulfillmentRequestKind(StrEnum):
     SALE = "sale"
+    # Legacy persisted name: /отпр may now settle in either transfer direction.
     CLIENT_WITHDRAWAL = "client_withdrawal"
 
 
@@ -77,6 +78,7 @@ class StartFulfillmentExecution:
     mode: str
     phase: str
     timeout_at: datetime
+    command_message_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -516,6 +516,206 @@ async def test_client_withdrawal_is_enqueued_by_otpr_and_debited_only_after_conf
     assert deal["status"] == "done"
 
 
+async def test_otpr_debits_client_independently_of_sale_queue(
+    pool, repo, client_id
+) -> None:
+    await repo.deposit(
+        client_id=client_id,
+        currency_code="USDT",
+        amount=Decimal("500"),
+        source="test",
+        idempotency_key="otpr-separate-opening",
+    )
+    queue = _service(pool)
+    sale_deal_id = await _deal(pool, client_id, suffix="otpr-separate-sale")
+    sale = await queue.enqueue(
+        EnqueueFulfillment(
+            deal_id=sale_deal_id,
+            request_kind=FulfillmentRequestKind.SALE,
+            qty=Decimal("190"),
+        )
+    )
+
+    started = await queue.start_client_withdrawal(
+        _start(
+            chat_id=-100500,
+            suffix="otpr-separate",
+            requested_qty=Decimal("190"),
+            command_message_id=901,
+        )
+    )
+
+    assert started.item.request_kind is FulfillmentRequestKind.CLIENT_WITHDRAWAL
+    assert started.item.deal_id != sale_deal_id
+    assert await _client_usdt_balance(pool, client_id) == Decimal("500")
+    assert [item.id for item in await queue.list_active()] == [
+        sale.id,
+        started.item.id,
+    ]
+
+    settlement = DealSettlementService(
+        partial(AsyncpgUnitOfWork, pool), fulfillment_queue_service=queue
+    )
+    transfer = ConfirmedTransfer(
+        watch_id=started.watch_id,
+        tx_hash="otpr-separate-transfer",
+        direction="IN",
+        amount=Decimal("190"),
+        token_symbol="USDT",
+        confirmations=1,
+        block_ts=datetime.now(UTC),
+        from_address="TOurAddress",
+        to_address="TClientAddress",
+    )
+    settled = await settlement.settle(transfer)
+    repeated = await settlement.settle(transfer)
+
+    assert settled.client_wallet_amount == Decimal("-190")
+    assert settled.client_wallet_balance_after == Decimal("310")
+    assert repeated.client_wallet_balance_after == Decimal("310")
+
+    assert await _client_usdt_balance(pool, client_id) == Decimal("310")
+    assert [(item.id, item.status) for item in await queue.list_active()] == [
+        (sale.id, FulfillmentStatus.QUEUED)
+    ]
+    async with pool.acquire() as connection:
+        assert await connection.fetchval(
+            """
+            SELECT COUNT(*) FROM transactions
+            WHERE client_id = $1
+              AND idempotency_key = $2
+              AND amount = -190
+            """,
+            client_id,
+            f"fulfillment:{started.item.id}:client_withdrawal",
+        ) == 1
+
+
+async def test_otpr_without_amount_accepts_transfer_with_zero_starting_balance(
+    pool, client_id
+) -> None:
+    queue = _service(pool)
+    started = await queue.start_client_withdrawal(
+        _start(
+            chat_id=-100500,
+            suffix="otpr-open-amount",
+            command_message_id=902,
+        )
+    )
+
+    assert started.item.qty == 0
+    settlement = DealSettlementService(
+        partial(AsyncpgUnitOfWork, pool), fulfillment_queue_service=queue
+    )
+    await settlement.settle(
+        ConfirmedTransfer(
+            watch_id=started.watch_id,
+            tx_hash="otpr-open-amount-transfer",
+            direction="IN",
+            amount=Decimal("190"),
+            token_symbol="USDT",
+            confirmations=1,
+            block_ts=datetime.now(UTC),
+            from_address="TOurAddress",
+            to_address="TClientAddress",
+        )
+    )
+
+    assert await _client_usdt_balance(pool, client_id) == Decimal("-190")
+
+
+async def test_otpr_incoming_transfer_credits_client_balance(
+    pool, client_id
+) -> None:
+    queue = _service(pool)
+    await _wallet_fact(pool, qty=Decimal("50"), key="otpr-incoming-fact")
+    started = await queue.start_client_withdrawal(
+        _start(
+            chat_id=-100500,
+            suffix="otpr-incoming",
+            requested_qty=Decimal("190"),
+            command_message_id=904,
+        )
+    )
+    settlement = DealSettlementService(
+        partial(AsyncpgUnitOfWork, pool), fulfillment_queue_service=queue
+    )
+    transfer = ConfirmedTransfer(
+        watch_id=started.watch_id,
+        tx_hash="otpr-incoming-transfer",
+        direction="OUT",
+        amount=Decimal("190"),
+        token_symbol="USDT",
+        confirmations=1,
+        block_ts=datetime.now(UTC),
+        from_address="TClientAddress",
+        to_address="TOurAddress",
+    )
+    settled = await settlement.settle(transfer)
+    repeated = await settlement.settle(transfer)
+
+    assert settled.client_wallet_amount == Decimal("190")
+    assert settled.client_wallet_balance_after == Decimal("190")
+    assert repeated.client_wallet_balance_after == Decimal("190")
+
+    assert await _client_usdt_balance(pool, client_id) == Decimal("190")
+    assert (await queue.summary()).usdt_fact == Decimal("240")
+
+
+async def test_otpr_test_and_main_transfers_are_each_debited_once(
+    pool, repo, client_id
+) -> None:
+    await repo.deposit(
+        client_id=client_id,
+        currency_code="USDT",
+        amount=Decimal("300"),
+        source="test",
+        idempotency_key="otpr-test-opening",
+    )
+    queue = _service(pool)
+    started = await queue.start_client_withdrawal(
+        _start(
+            chat_id=-100500,
+            suffix="otpr-test-mode",
+            requested_qty=Decimal("190"),
+            command_message_id=903,
+            mode="TEST_THEN_MAIN",
+        )
+    )
+    settlement = DealSettlementService(
+        partial(AsyncpgUnitOfWork, pool), fulfillment_queue_service=queue
+    )
+    test_transfer = ConfirmedTransfer(
+        watch_id=started.watch_id,
+        tx_hash="otpr-test-transfer",
+        direction="IN",
+        amount=Decimal("1"),
+        token_symbol="USDT",
+        confirmations=1,
+        block_ts=datetime.now(UTC),
+        from_address="TOurAddress",
+        to_address="TClientAddress",
+    )
+    await settlement.settle_test(test_transfer)
+    await settlement.settle_test(test_transfer)
+    assert await _client_usdt_balance(pool, client_id) == Decimal("299")
+
+    await settlement.settle(
+        ConfirmedTransfer(
+            watch_id=started.watch_id,
+            tx_hash="otpr-main-after-test",
+            direction="IN",
+            amount=Decimal("190"),
+            token_symbol="USDT",
+            confirmations=1,
+            block_ts=datetime.now(UTC),
+            from_address="TOurAddress",
+            to_address="TClientAddress",
+        )
+    )
+    assert await _client_usdt_balance(pool, client_id) == Decimal("109")
+
+
 async def test_otpr_keeps_tg_actor_without_using_it_as_users_foreign_key(
     pool, repo, client_id
 ) -> None:
@@ -663,6 +863,8 @@ def _start(
     suffix: str,
     actor_tg_user_id: int | None = None,
     requested_qty: Decimal | None = None,
+    command_message_id: int | None = None,
+    mode: str = "SINGLE",
 ) -> StartFulfillmentExecution:
     return StartFulfillmentExecution(
         chat_id=chat_id,
@@ -672,9 +874,10 @@ def _start(
         our_address="TOurAddress",
         actor_tg_user_id=actor_tg_user_id,
         requested_qty=requested_qty,
-        mode="SINGLE",
+        mode=mode,
         phase="MAIN",
         timeout_at=datetime.now(UTC),
+        command_message_id=command_message_id,
     )
 
 

@@ -26,6 +26,7 @@ from services.payment_watch.receipt_image import PaymentReceiptImageBuilder
 from services.payment_watch.settlement_models import ConfirmedTransfer
 from services.payment_watch.settlement_service import DealSettlementService
 from services.payment_watch.tronscan_gateway import TronscanGateway, TronscanGatewayError
+from services.wallets.text_builder import WalletTextBuilder
 
 
 class PaymentWatchError(Exception):
@@ -88,42 +89,31 @@ class PaymentWatchService:
         mode = "TEST_THEN_MAIN" if command.test_mode else "SINGLE"
         phase = "TEST" if command.test_mode else "MAIN"
         timeout_at = datetime.now(UTC) + timedelta(seconds=self.timeout_seconds)
-        if self.fulfillment_queue_service is not None:
-            try:
-                started = await self.fulfillment_queue_service.start_execution(
-                    StartFulfillmentExecution(
-                        chat_id=command.chat_id,
-                        chat_name=command.chat_name,
-                        reply_message_id=command.reply_message_id,
-                        address=address,
-                        our_address=our_address,
-                        actor_tg_user_id=command.created_by_user_id,
-                        requested_qty=(
-                            Decimal(command.manager_note.replace(",", "."))
-                            if command.manager_note is not None
-                            else None
-                        ),
-                        mode=mode,
-                        phase=phase,
-                        timeout_at=timeout_at,
-                    )
+        if self.fulfillment_queue_service is None:
+            raise PaymentWatchError("Учёт вывода USDT недоступен.")
+        try:
+            started = await self.fulfillment_queue_service.start_client_withdrawal(
+                StartFulfillmentExecution(
+                    chat_id=command.chat_id,
+                    chat_name=command.chat_name,
+                    reply_message_id=command.reply_message_id,
+                    address=address,
+                    our_address=our_address,
+                    actor_tg_user_id=command.created_by_user_id,
+                    requested_qty=(
+                        Decimal(command.manager_note.replace(",", "."))
+                        if command.manager_note is not None
+                        else None
+                    ),
+                    mode=mode,
+                    phase=phase,
+                    timeout_at=timeout_at,
+                    command_message_id=command.command_message_id,
                 )
-            except FulfillmentQueueError as exc:
-                raise PaymentWatchError(str(exc)) from exc
-            watch_id = started.watch_id
-        else:
-            watch_id = await self.repo.create_payment_watch(
-                chat_id=command.chat_id,
-                chat_name=command.chat_name,
-                reply_message_id=command.reply_message_id,
-                address=address,
-                our_address=our_address,
-                created_by_user_id=command.created_by_user_id,
-                mode=mode,
-                phase=phase,
-                status="WATCHING",
-                timeout_at=timeout_at,
             )
+        except FulfillmentQueueError as exc:
+            raise PaymentWatchError(str(exc)) from exc
+        watch_id = started.watch_id
         return PaymentWatchStarted(
             watch_id=watch_id,
             message_text=self.builder.build_started(
@@ -232,17 +222,21 @@ class PaymentWatchService:
             if mode == "TEST_THEN_MAIN" and phase == "TEST":
                 if transfer.amount != self.test_amount:
                     continue
-                await self.repo.add_payment_watch_event(
-                    watch_id=watch_id,
-                    tx_hash=transfer.tx_hash,
-                    event_type="TEST",
-                    direction=direction,
-                    amount=transfer.amount,
-                    token_symbol=transfer.token_symbol,
-                    confirmations=transfer.confirmations,
-                    block_ts=transfer.block_ts,
+                if self.settlement_service is None:
+                    raise PaymentWatchError("Settlement service is not configured")
+                await self.settlement_service.settle_test(
+                    ConfirmedTransfer(
+                        watch_id=watch_id,
+                        tx_hash=transfer.tx_hash,
+                        direction=direction,
+                        amount=transfer.amount,
+                        token_symbol=transfer.token_symbol,
+                        confirmations=transfer.confirmations,
+                        block_ts=transfer.block_ts,
+                        from_address=transfer.from_address,
+                        to_address=transfer.to_address,
+                    )
                 )
-                await self.repo.set_payment_watch_phase(watch_id=watch_id, phase="MAIN")
                 log.info(
                     "Payment watch %s test payment detected: tx=%s amount=%s",
                     watch_id, transfer.tx_hash, transfer.amount,
@@ -264,9 +258,6 @@ class PaymentWatchService:
                         delete_message_id=int(watch["notice_message_id"]) if watch.get("notice_message_id") else None,
                     )
                 )
-                continue
-
-            if mode == "TEST_THEN_MAIN" and transfer.amount == self.test_amount:
                 continue
 
             if self.settlement_service is None:
@@ -315,6 +306,7 @@ class PaymentWatchService:
                         else self.builder.build_main_success(
                             amount=evidence.amount,
                             tx_hash=evidence.tx_hash,
+                            direction=evidence.direction,
                         )
                     ),
                     delete_message_id=int(watch["notice_message_id"]) if watch.get("notice_message_id") else None,
@@ -322,5 +314,25 @@ class PaymentWatchService:
                     photo_filename=f"payment_receipt_{watch_id}.png" if photo_bytes else None,
                 )
             )
+            if (
+                settlement.created
+                and settlement.client_wallet_amount is not None
+                and settlement.client_wallet_balance_after is not None
+                and settlement.client_wallet_precision is not None
+            ):
+                amount = settlement.client_wallet_amount
+                notifications.append(
+                    PaymentWatchNotification(
+                        chat_id=int(watch["chat_id"]),
+                        reply_message_id=None,
+                        text=WalletTextBuilder.currency_change_success(
+                            code="USDT",
+                            delta=abs(amount),
+                            precision=settlement.client_wallet_precision,
+                            sign="+" if amount >= 0 else "-",
+                            balance=settlement.client_wallet_balance_after,
+                        ),
+                    )
+                )
             break
         return notifications
