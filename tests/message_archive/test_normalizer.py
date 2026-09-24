@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from aiogram.client.default import Default
 from aiogram.types import Chat, Message, MessageOriginChannel, MessageOriginUser, PhotoSize, User
 
 from services.message_archive.normalizer import MessageArchiveNormalizer
@@ -27,6 +28,20 @@ def test_bot_message_normalization_uses_largest_photo_and_direction() -> None:
     assert normalized.text_plain == "Подтверждение"
     assert normalized.attachments[0].telegram_file_id == "large"
     assert normalized.attachments[0].download_status == "pending"
+
+
+def test_outgoing_message_with_aiogram_default_is_archived() -> None:
+    message = Message(
+        message_id=1960,
+        date=datetime(2026, 9, 24, tzinfo=UTC),
+        chat=Chat(id=1015722286, type="private", first_name="Клиент"),
+        text="ℹ️ SKYEX — НАШИ ВОЗМОЖНОСТИ",
+    ).model_copy(update={"link_preview_options": Default("link_preview")})
+
+    normalized = MessageArchiveNormalizer.from_bot_message(message, outbound=True)
+
+    assert normalized.text_plain == "ℹ️ SKYEX — НАШИ ВОЗМОЖНОСТИ"
+    assert normalized.raw_payload["link_preview_options"] == "Default('link_preview')"
 
 
 def test_bot_message_normalization_preserves_modern_forward_origin() -> None:
@@ -168,4 +183,3 @@ def test_desktop_unknown_attachment_is_metadata_only() -> None:
 
     assert message.attachments[0].attachment_type == "document"
     assert message.attachments[0].download_status == "skipped"
-

@@ -156,6 +156,9 @@ class MessageArchiveNormalizer:
             exclude_none=True,
             exclude={"reply_to_message", "pinned_message"},
             warnings=False,
+            # Aiogram may leave Default(...) placeholders in returned messages.
+            # Keep the archive JSON-serializable without losing the message itself.
+            fallback=str,
         )
         forward_info = cls._bot_forward_info(message)
 

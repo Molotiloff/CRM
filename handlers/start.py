@@ -2,11 +2,62 @@ from collections.abc import Awaitable, Callable
 
 from aiogram import Router
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
+from aiogram.types import CallbackQuery, LinkPreviewOptions, Message, ReplyKeyboardRemove
 
 from keyboards import MainKeyboard
 from services.admin_client import ClientBootstrapService
 from telegram_adapters.message_context import get_chat_name
+
+SKYEX_INFO_TEXT = (
+    "ℹ️ <b>SKYEX — НАШИ ВОЗМОЖНОСТИ</b>\n\n"
+    "В этом чате вы можете получить расчёт, зафиксировать условия и провести сделку с нашей командой.\n\n"
+    "━━━━━━━━━━━━━━━\n"
+    "<b>💱 ПОКУПКА И ПРОДАЖА USDT</b>\n"
+    "━━━━━━━━━━━━━━━\n"
+    "<b>💵 НАЛИЧНЫЕ В РОССИИ И ЗА РУБЕЖОМ</b>\n"
+    "• Приём и выдача наличных\n"
+    "• Перемещение средств между городами и странами\n\n"
+    "🏢 Кассы SKYEX:\n"
+    "🇷🇺 Россия — Екатеринбург (ЕКБ) • Челябинск (ЧЛБ) • Тюмень (ТМН) • Москва (МСК)\n"
+    "🇹🇭 Таиланд — Пхукет\n\n"
+    "🇷🇺 Работаем во всех крупных городах России — приём и выдача наличных осуществляются "
+    "через нашу сеть партнёрских офисов.\n\n"
+    "🌍 Работаем по всему миру — приём и выдача наличных осуществляются через нашу сеть "
+    "партнёрских офисов. Условия по нужному городу уточняйте у менеджера.\n\n"
+    "━━━━━━━━━━━━━━━\n"
+    "<b>🌐 МЕЖДУНАРОДНЫЕ ПЛАТЕЖИ</b>\n"
+    "• Оплата инвойсов\n"
+    "• Переводы SWIFT / SEPA\n"
+    "• Оплата товаров и услуг за рубежом\n"
+    "• Оплата автомобилей и аукционов Copart / IAAI\n\n"
+    "━━━━━━━━━━━━━━━\n"
+    "<b>🇨🇳 КИТАЙ</b>\n"
+    "• Переводы на карты китайских банков\n"
+    "• Пополнение Alipay / WeChat\n"
+    "• Оплата товаров и инвойсов\n"
+    "• Выдача наличных в Иу • Шэньчжэнь • Гуанчжоу\n\n"
+    "━━━━━━━━━━━━━━━\n"
+    "<b>💳 ЗАРУБЕЖНЫЕ КАРТЫ</b>\n"
+    "• Пополнение иностранных банковских карт\n"
+    "• Выдача наличных через ATM за рубежом\n\n"
+    "━━━━━━━━━━━━━━━\n"
+    "<b>🔄 НЕ НАШЛИ НУЖНОГО НАПРАВЛЕНИЯ?</b>\n"
+    "Если нужной страны, валюты или способа расчёта нет в списке — напишите задачу в чат. "
+    "Проверим доступные варианты и предложим решение.\n\n"
+    "━━━━━━━━━━━━━━━\n"
+    "<b>👥 КОМАНДА SKYEX</b>\n\n"
+    "👤 Менеджеры: <a href=\"https://t.me/skyex_support\">@skyex_support</a> • "
+    "<a href=\"https://t.me/power_skyex\">@power_skyex</a>\n"
+    "Расчёты, курсы, фиксация и сопровождение сделок.\n\n"
+    "🌍 Международные операции: <a href=\"https://t.me/operation_skyex\">@operation_skyex</a>\n"
+    "Инвойсы, международные платежи, SWIFT / SEPA, CNY и другие зарубежные направления.\n\n"
+    "📊 Бухгалтерия: <a href=\"https://t.me/finance_skyex\">@finance_skyex</a>\n"
+    "Сверки, проведённые операции и вопросы по расчётам.\n\n"
+    "💬 По любому вопросу можно писать прямо в общий чат — нужный сотрудник подключится сам.\n\n"
+    "━━━━━━━━━━━━━━━\n"
+    "🌐 <a href=\"https://sky-ex.ru/\">sky-ex.ru</a>\n\n"
+    "🤝 Команда SKYEX"
+)
 
 
 class StartHandler:
@@ -50,6 +101,7 @@ class StartHandler:
             "⚙️ <b>Команды:</b>\n"
             "<code>/дай</code> — показывает актуальный баланс\n"
             "<code>/кош</code> — актуальный кошелёк\n"
+            "<code>/info</code> — наши возможности и контакты\n"
             "<code>/екб</code> / <code>/члб</code> — информация по проходкам в городах"
         )
         # Не показываем клавиатуру автоматически
@@ -73,6 +125,7 @@ class StartHandler:
             "⚙️ <b>Команды:</b>\n"
             "<code>/дай</code> — показывает актуальный баланс\n"
             "<code>/кош</code> — актуальный кошелёк\n"
+            "<code>/info</code> — наши возможности и контакты\n"
             "<code>/екб</code> / <code>/члб</code> — информация по проходкам в городах"
         )
         # Тоже без автоматического показа клавиатуры
@@ -81,6 +134,7 @@ class StartHandler:
     async def _show_help_commands(self, message: Message) -> None:
         text_help = (
             "📖 Доступные команды\n\n"
+            "ℹ️ <code>/info</code> — возможности SKYEX и контакты команды.\n\n"
             "🏦 Кошелёк:\n"
             "• <code>/кошелек</code> — показать все счета.\n"
             "• <code>/дай</code> — показать только ненулевые счета.\n"
@@ -143,9 +197,17 @@ class StartHandler:
     async def _cmd_help_commands(self, message: Message) -> None:
         await self._show_help_commands(message)
 
+    async def _cmd_info(self, message: Message) -> None:
+        await message.answer(
+            SKYEX_INFO_TEXT,
+            parse_mode="HTML",
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
+        )
+
     def _register(self) -> None:
         self.router.message.register(self._on_start, CommandStart())
         self.router.message.register(self._cmd_help, Command("помоги"))
         self.router.message.register(self._cmd_help_commands, Command("help"))
+        self.router.message.register(self._cmd_info, Command("info"))
         self.router.message.register(self._show_keyboard, Command("кнопки"))
         self.router.message.register(self._hide_keyboard, Command("скрыть"))

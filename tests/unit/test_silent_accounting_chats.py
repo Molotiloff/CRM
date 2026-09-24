@@ -5,9 +5,9 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from aiogram.types import CallbackQuery, Chat, Message, User
+from aiogram.types import CallbackQuery, Chat, LinkPreviewOptions, Message, User
 
-from handlers.start import StartHandler
+from handlers.start import SKYEX_INFO_TEXT, StartHandler
 from handlers.wallets import WalletsHandler
 from middlewares.silent_accounting_chats import SilentAccountingChatsMiddleware
 from services.wallets.models import (
@@ -96,6 +96,22 @@ async def test_start_registers_silent_chat_without_answer() -> None:
     )
     sync_registry.assert_awaited_once_with()
     message.answer.assert_not_awaited()
+
+
+async def test_info_sends_single_formatted_message() -> None:
+    handler = StartHandler(AsyncMock())
+    message = SimpleNamespace(answer=AsyncMock())
+
+    await handler._cmd_info(message)
+
+    message.answer.assert_awaited_once_with(
+        SKYEX_INFO_TEXT,
+        parse_mode="HTML",
+        link_preview_options=LinkPreviewOptions(is_disabled=True),
+    )
+    assert "https://t.me/skyex_support" in SKYEX_INFO_TEXT
+    assert "https://sky-ex.ru/" in SKYEX_INFO_TEXT
+    assert len(SKYEX_INFO_TEXT) < 4096
 
 
 async def test_wallet_change_posts_silently() -> None:
