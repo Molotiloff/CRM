@@ -25,13 +25,14 @@ class SheetsWriteError(Exception):
 _SPREADSHEET_ID_RE = re.compile(r"/spreadsheets/d/([a-zA-Z0-9-_]+)")
 
 # Карта ячеек с внутренними курсами на листе «Главная»
-_DEFAULT_CELL_MAP = {
+MAIN_RATE_CELL_MAP = {
     "EUR": "Главная!E2",
     "USDT": "Главная!E9",
     "USD": "Главная!H9",
     "USDW": "Главная!H2",
     "THB": "Главная!K2",
 }
+_RATE_CODE_ALIASES = {"USD BL": "USD", "USD WH": "USDW"}
 
 # Кеш только для сервисных объектов (не для значений)
 _cached = {
@@ -153,8 +154,8 @@ def _read_main_rate_fresh(code: str, cell_map: dict[str, str] | None = None) -> 
     """Читает актуальный курс из листа «Главная» (без кеша)."""
     if not code:
         return None
-    cell_map = cell_map or _DEFAULT_CELL_MAP
-    ref = cell_map.get(code.upper())
+    cell_map = cell_map or MAIN_RATE_CELL_MAP
+    ref = _main_rate_cell(code, cell_map)
     if not ref:
         return None
     service = _get_service()
@@ -176,6 +177,11 @@ def _read_main_rate_fresh(code: str, cell_map: dict[str, str] | None = None) -> 
         return val if val.is_finite() else None
     except InvalidOperation:
         return None
+
+
+def _main_rate_cell(code: str, cell_map: dict[str, str]) -> str | None:
+    normalized = code.strip().upper()
+    return cell_map.get(normalized) or cell_map.get(_RATE_CODE_ALIASES.get(normalized, ""))
 
 
 def read_main_rate(code: str, cell_map: dict[str, str] | None = None) -> Decimal:
@@ -228,7 +234,7 @@ def append_sale_row(
 ) -> tuple[int, Decimal | None]:
     """Записывает строку на лист 'Продажа'. Столбец D — свежий курс из «Главная», столбец B — номер заявки."""
     if cell_map is None:
-        cell_map = _DEFAULT_CELL_MAP
+        cell_map = MAIN_RATE_CELL_MAP
 
     try:
         service = _get_service()
@@ -242,11 +248,11 @@ def append_sale_row(
         val_amount = _coerce_num(out_amount)
         val_rate = _coerce_num(rate)
 
-        # Всегда читаем актуальный курс для D
-        val_input = None
+        # Для известных валют пустой «Вход» (D) делает строку неполной.
+        rate_cell = _main_rate_cell(out_cur, cell_map)
         fresh = _read_main_rate_fresh(out_cur, cell_map)
-        if fresh is not None:
-            val_input = _coerce_num(fresh)
+        if rate_cell and fresh is None:
+            raise SheetsWriteError(f"Не найден внутренний курс для {out_cur!r} в {rate_cell}.")
 
         data = []
         if created_at is not None:
@@ -254,8 +260,8 @@ def append_sale_row(
         if request_id is not None:
             data.append({"range": f"{sheet_name}!B{row}", "values": [[str(request_id)]]})
         data.append({"range": f"{sheet_name}!C{row}", "values": [[out_cur]]})
-        if val_input is not None:
-            data.append({"range": f"{sheet_name}!D{row}", "values": [[val_input]]})
+        if fresh is not None:
+            data.append({"range": f"{sheet_name}!D{row}", "values": [[_coerce_num(fresh)]]})
         data.extend(
             [
                 {"range": f"{sheet_name}!E{row}", "values": [[val_amount]]},

@@ -38,7 +38,7 @@ def _is_forwarded_message(message: Message) -> bool:
 
 class AcceptShortHandler:
     """
-    /пд|/пе|/пт|/пр|/пб <recv_amount_expr> <од|ое|от|ор|об> <pay_amount_expr> [комментарий]
+    /пд|/пе|/пт|/пр|/пб|/пбат <recv_amount_expr> <од|ое|от|ор|об|обат> <pay_amount_expr> [комментарий]
 
     Принимаем слева — СПИСЫВАЕМ у клиента; отдаём справа — ЗАЧИСЛЯЕМ клиенту.
     Если команда отправлена ответом на карточку бота — редактируем заявку.
@@ -144,13 +144,14 @@ class AcceptShortHandler:
         self.router.message.register(self._cmd_accept_short, Command("пт"))
         self.router.message.register(self._cmd_accept_short, Command("пр"))
         self.router.message.register(self._cmd_accept_short, Command("пб"))
+        self.router.message.register(self._cmd_accept_short, Command("пбат"))
         self.router.message.register(self._cmd_accept_short, Command("пп"))
         self.router.message.register(self._cmd_accept_short, Command("прмск"))
         self.router.message.register(self._cmd_accept_short, Command("прспб"))
         self.router.message.register(self._cmd_accept_short, Command("прпер"))
         self.router.message.register(
             self._cmd_accept_short,
-            F.text.regexp(r"(?iu)^/(пд|пе|пт|пр|пб|прмск|прспб|прпер|пп)(?:@\w+)?\b"),
+            F.text.regexp(r"(?iu)^/(пбат|пд|пе|пт|пр|пб|прмск|прспб|прпер|пп)(?:@\w+)?\b"),
         )
         self.router.callback_query.register(self._cb_cancel, F.data.startswith("req_cancel:"))
 

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
-from gutils.requests_sheet import SheetsWriteError
+from gutils.requests_sheet import MAIN_RATE_CELL_MAP, SheetsWriteError
 from services.request_table.sheets_trade_gateway import AsyncSheetsTradeGateway
 
 
@@ -31,19 +31,14 @@ class TableDoneResult:
 
 class RequestTableDoneService:
     _RUB_CODES = {"RUB", "РУБМСК", "РУБСПБ", "РУБПЕР", "РУБТЮМ"}
-
-    _DEFAULT_CELL_MAP = {
-        "EUR": "Главная!E2",
-        "USDT": "Главная!E8",
-        "USD": "Главная!H8",
-        "USDW": "Главная!H2",
-    }
+    _FIAT_CODES = frozenset({"EUR", "USD", "USDW", "THB"})
 
     _TABLE_CURRENCY_NAMES = {
         "USD": "USD BL",
         "USDW": "USD WH",
         "EUR": "EUR",
         "USDT": "USDT",
+        "THB": "THB",
     }
 
     _SEP = {" ", "\u00a0", "\u202f", "\u2009", "'", "’", "ʼ", "‛", "`"}
@@ -149,7 +144,7 @@ class RequestTableDoneService:
         in_cur_table = self._map_table_currency(in_cur)
         out_cur_table = self._map_table_currency(out_cur)
 
-        if in_cur == "USDT" and out_cur not in {"EUR", "USD", "USDW"}:
+        if in_cur == "USDT" and out_cur not in self._FIAT_CODES:
             await self.sheets_gateway.append_buy_row(
                 currency="USDT",
                 amount=in_amt,
@@ -161,7 +156,7 @@ class RequestTableDoneService:
             )
             sheet_type = "Покупка"
 
-        elif out_cur == "USDT" and in_cur not in {"EUR", "USD", "USDW"}:
+        elif out_cur == "USDT" and in_cur not in self._FIAT_CODES:
             await self.sheets_gateway.append_sale_row(
                 in_currency=in_cur_table,
                 out_currency="USDT",
@@ -175,7 +170,7 @@ class RequestTableDoneService:
             )
             sheet_type = "Продажа"
 
-        elif out_cur in {"EUR", "USD", "USDW"} and in_cur_table == "RUB":
+        elif out_cur in self._FIAT_CODES and in_cur_table == "RUB":
             await self.sheets_gateway.append_sale_row(
                 in_currency="RUB",
                 out_currency=out_cur_table,
@@ -189,7 +184,7 @@ class RequestTableDoneService:
             )
             sheet_type = "Продажа"
 
-        elif in_cur in {"EUR", "USD", "USDW"} and out_cur_table == "RUB":
+        elif in_cur in self._FIAT_CODES and out_cur_table == "RUB":
             await self.sheets_gateway.append_buy_row(
                 currency=in_cur_table,
                 amount=in_amt,
@@ -201,10 +196,10 @@ class RequestTableDoneService:
             )
             sheet_type = "Покупка"
 
-        elif in_cur in {"EUR", "USD", "USDW"} and out_cur == "USDT":
+        elif in_cur in self._FIAT_CODES and out_cur == "USDT":
             inner_rate = await self.sheets_gateway.read_main_rate(
                 in_cur,
-                self._DEFAULT_CELL_MAP,
+                MAIN_RATE_CELL_MAP,
             )
             rub_total = in_amt * inner_rate
             await self.sheets_gateway.append_buy_row(
@@ -230,10 +225,10 @@ class RequestTableDoneService:
             )
             sheet_type = f"Покупка + Продажа ({in_cur_table})"
 
-        elif in_cur == "USDT" and out_cur in {"EUR", "USD", "USDW"}:
+        elif in_cur == "USDT" and out_cur in self._FIAT_CODES:
             inner_rate = await self.sheets_gateway.read_main_rate(
                 out_cur,
-                self._DEFAULT_CELL_MAP,
+                MAIN_RATE_CELL_MAP,
             )
             rub_total = out_amt * inner_rate
             await self.sheets_gateway.append_sale_row(
@@ -259,10 +254,10 @@ class RequestTableDoneService:
             )
             sheet_type = f"Продажа + Покупка ({out_cur_table})"
 
-        elif in_cur in {"EUR", "USD", "USDW"} and out_cur in {"EUR", "USD", "USDW"}:
+        elif in_cur in self._FIAT_CODES and out_cur in self._FIAT_CODES:
             in_rate = await self.sheets_gateway.read_main_rate(
                 in_cur,
-                self._DEFAULT_CELL_MAP,
+                MAIN_RATE_CELL_MAP,
             )
             rub_total = in_amt * in_rate
             await self.sheets_gateway.append_buy_row(
@@ -278,9 +273,9 @@ class RequestTableDoneService:
                 raise SheetsWriteError("Сумма продажи должна быть > 0.")
             sale_rate = rub_total / out_amt
             pretty_out = out_cur_table
-            custom_cell_map = dict(self._DEFAULT_CELL_MAP)
+            custom_cell_map = dict(MAIN_RATE_CELL_MAP)
             if pretty_out not in custom_cell_map:
-                custom_cell_map[pretty_out] = self._DEFAULT_CELL_MAP[out_cur]
+                custom_cell_map[pretty_out] = MAIN_RATE_CELL_MAP[out_cur]
             await self.sheets_gateway.append_sale_row(
                 in_currency=in_cur,
                 out_currency=pretty_out,

@@ -89,6 +89,44 @@ PLAIN_CARD = "Заявка: 12345678\nПолучаем: 100 usdt\nКурс: 90\n
 
 
 class TestCreateCore:
+    @pytest.mark.parametrize(
+        ("receive_code", "receive_expr", "pay_code", "pay_expr", "rub_balance", "thb_balance"),
+        [
+            ("rub", "1000", "thb", "1000/2.7", Decimal("-1000"), Decimal("370.37")),
+            ("thb", "1000", "rub", "1000*2.7", Decimal("2700"), Decimal("-1000")),
+        ],
+    )
+    async def test_thb_rub_exchange_posts_both_client_balances(
+        self,
+        create_uc,
+        repo,
+        client_id,
+        receive_code: str,
+        receive_expr: str,
+        pay_code: str,
+        pay_expr: str,
+        rub_balance: Decimal,
+        thb_balance: Decimal,
+    ) -> None:
+        await repo.add_currency(client_id, "THB", 2)
+
+        result = await create_uc.execute_core(
+            _create_params(
+                recv_code=receive_code,
+                recv_amount_expr=receive_expr,
+                pay_code=pay_code,
+                pay_amount_expr=pay_expr,
+                recv_is_deposit=False,
+                pay_is_withdraw=False,
+            ),
+            messenger=FakeMessenger(),
+            replier=CollectingReplier(),
+        )
+
+        assert result.ok and result.req_id
+        assert await balance_of(repo, client_id, "RUB") == rub_balance
+        assert await balance_of(repo, client_id, "THB") == thb_balance
+
     async def test_happy_path(self, create_uc, repo, exchange_requests_repo, client_id) -> None:
         messenger = FakeMessenger()
         replier = CollectingReplier()
