@@ -98,6 +98,10 @@ def _deal_item(row: Deal) -> DealItemDto:
         asset=_deal_asset(str(row.deal_type), body),
         direction=_deal_direction(str(row.deal_type), body),
         amountRub=_deal_amount_rub(str(row.deal_type), body),
+        transferAmount=(
+            f"{body.get('amount')} {body.get('currency')}"
+            if str(row.deal_type) == "client_transfer" else None
+        ),
         city=str(row.city),
         status=status,
         insufficientUsdt=bool(body.get("insufficient_usdt")) or None,
@@ -119,6 +123,7 @@ def _deal_type_label(deal_type: str) -> str:
         "withdrawal": "Выдача",
         "delivery": "Доставка",
         "transfer_city": "Перестановка",
+        "client_transfer": "Перевод",
         "conversion": "Конвертация",
         "yuan": "Юань",
         "invoice": "Инвойс",
@@ -137,6 +142,8 @@ def _deal_asset(deal_type: str, body: Mapping[str, Any]) -> str:
 
 
 def _deal_amount_rub(deal_type: str, body: Mapping[str, Any]) -> float:
+    if deal_type == "client_transfer":
+        return 0.0
     if deal_type == "best_change":
         qty = _body_decimal(body, "qty_usdt")
         client_rate = _body_decimal(body, "client_rate_rub")
@@ -161,6 +168,8 @@ def _deal_amount_rub(deal_type: str, body: Mapping[str, Any]) -> float:
 
 
 def _deal_direction(deal_type: str, body: Mapping[str, Any]) -> str:
+    if deal_type == "client_transfer":
+        return f"{body.get('from_client_name', '—')} → {body.get('to_client_name', '—')}"
     if deal_type == "best_change":
         return {
             "purchase": "RUB → USDT",

@@ -89,9 +89,17 @@ class ClientReadRepository(ConnectionBoundRepo):
                 SELECT
                     t.client_id,
                     COUNT(*) AS deals_count,
-                    COALESCE(SUM(ABS(t.amount)) FILTER (WHERE a.currency_code = 'RUB'), 0) AS turnover_rub,
-                    COALESCE(SUM(ABS(t.amount)) FILTER (WHERE a.currency_code = 'RUB' AND t.amount < 0), 0) AS purchase_volume_rub,
-                    COALESCE(SUM(ABS(t.amount)) FILTER (WHERE a.currency_code = 'RUB' AND t.amount > 0), 0) AS sale_volume_rub
+                    COALESCE(SUM(ABS(t.amount)) FILTER (
+                        WHERE a.currency_code = 'RUB' AND t.source IS DISTINCT FROM 'client_transfer'
+                    ), 0) AS turnover_rub,
+                    COALESCE(SUM(ABS(t.amount)) FILTER (
+                        WHERE a.currency_code = 'RUB' AND t.amount < 0
+                          AND t.source IS DISTINCT FROM 'client_transfer'
+                    ), 0) AS purchase_volume_rub,
+                    COALESCE(SUM(ABS(t.amount)) FILTER (
+                        WHERE a.currency_code = 'RUB' AND t.amount > 0
+                          AND t.source IS DISTINCT FROM 'client_transfer'
+                    ), 0) AS sale_volume_rub
                 FROM transactions t
                 JOIN client_accounts a ON a.id = t.account_id
                 WHERE t.client_id = ANY($1::bigint[])

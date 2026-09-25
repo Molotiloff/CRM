@@ -259,6 +259,8 @@ class DealService:
     @logged_operation("deal.create")
     @measured_operation("deal.create")
     async def create_deal(self, command: DealCreateCommand) -> Deal:
+        if command.deal_type is DealType.CLIENT_TRANSFER:
+            raise DealValidationError("Используйте операцию перевода между клиентами")
         deal = await self._repository.create_deal(command)
         self._bind_deal_context(deal)
         await self._publish("deal.created", deal)
@@ -283,6 +285,8 @@ class DealService:
     @measured_operation("deal.update")
     async def update_deal(self, deal_id: int, command: DealUpdateCommand) -> Deal:
         bind_log_context(deal_id=deal_id)
+        if (await self.get_deal(deal_id)).deal_type is DealType.CLIENT_TRANSFER:
+            raise DealValidationError("Проведённый перевод нельзя редактировать")
         deal = await self._repository.update_deal(deal_id, command)
         if deal is None:
             raise DealNotFoundError(f"Deal {deal_id} was not found")

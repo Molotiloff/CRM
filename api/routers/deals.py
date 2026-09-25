@@ -10,9 +10,11 @@ from api.models import ApiUser, UserRole
 from api.openapi import error_responses
 from api.presentation.deals import build_deal_details, build_deals_page
 from api.schemas.deals import (
+    ClientTransferCreateRequest,
     DealCancelRequest,
     DealCreateRequest,
     DealDetailsResponse,
+    DealFormContextDto,
     DealSourceEditRequest,
     DealsPageResponse,
     DealStatus,
@@ -22,7 +24,9 @@ from api.schemas.deals import (
     SettlementResolutionResponse,
     SettlementReviewResolutionRequest,
 )
+from domain import DomainValidationError
 from domain.accounting_flows import SettlementResolution as DomainSettlementResolution
+from services.crm.client_transfer_service import ClientTransferCommand, ClientTransferService
 from services.crm.deal_service import (
     DealCreateCommand,
     DealListFilter,
@@ -46,6 +50,37 @@ router = APIRouter(prefix="/api/v1", tags=["deals"])
 
 def get_deal_service(request: Request) -> DealService:
     return request.app.state.deal_service
+
+
+def get_client_transfer_service(request: Request) -> ClientTransferService:
+    return request.app.state.client_transfer_service
+
+
+@router.get(
+    "/deals/schema",
+    response_model=DealFormContextDto,
+    responses=error_responses(status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
+)
+async def get_deal_form_context(
+    request: Request,
+    _: ApiUser = Depends(require_role(UserRole.manager)),
+) -> DealFormContextDto:
+    repository = request.app.state.container.crm_repositories.client_reads
+    clients: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        page = await repository.list_clients(limit=500, offset=offset)
+        clients.extend(page)
+        if len(page) < 500:
+            break
+        offset += 500
+    return DealFormContextDto.model_validate({
+        "cities": ["Екб", "Члб", "Тюмень", "Мск"],
+        "counterparties": [],
+        "clients": [{"id": str(row["id"]), "name": row["name"]} for row in clients],
+        "companyRates": {},
+        "defaultCounterpartyPercent": 0,
+    })
 
 
 def get_deal_source_mutation_service(request: Request) -> DealSourceMutationService:
@@ -108,6 +143,8 @@ async def create_deal(
     user: ApiUser = Depends(require_role(UserRole.manager)),
     service: DealService = Depends(get_deal_service),
 ) -> DealDetailsResponse:
+    if payload.dealType is DealType.client_transfer:
+        raise DomainValidationError("Используйте маршрут перевода между клиентами")
     row = await service.create_deal(
         DealCreateCommand(
             deal_type=payload.dealType.value,
@@ -124,6 +161,40 @@ async def create_deal(
         )
     )
     return build_deal_details(row)
+
+
+@router.post(
+    "/deals/client-transfers",
+    response_model=DealDetailsResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=error_responses(
+        status.HTTP_400_BAD_REQUEST,
+        status.HTTP_401_UNAUTHORIZED,
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_409_CONFLICT,
+    ),
+)
+async def create_client_transfer(
+    payload: ClientTransferCreateRequest,
+    user: ApiUser = Depends(require_role(UserRole.manager)),
+    transfer_service: ClientTransferService = Depends(get_client_transfer_service),
+    deal_service: DealService = Depends(get_deal_service),
+) -> DealDetailsResponse:
+    result = await transfer_service.transfer(
+        ClientTransferCommand(
+            from_client_id=payload.fromClientId,
+            to_client_id=payload.toClientId,
+            amount=payload.amount,
+            currency=payload.currency,
+            source="crm",
+            source_ref=payload.idempotencyKey,
+            city="внутренний",
+            actor_user_id=user.id,
+            comment=payload.comment,
+            allow_negative=payload.allowNegative,
+        )
+    )
+    return build_deal_details(await deal_service.get_deal(result.deal_id))
 
 
 @router.get(

@@ -48,6 +48,7 @@ from db_asyncpg.repositories import (
     TransactionsRepo,
 )
 from db_asyncpg.repositories.cash_chat_registry import CashChatRegistryRepo
+from db_asyncpg.repositories.client_transfers import ClientTransferRepository
 from db_asyncpg.repositories.deal_workflow import DealWorkflowRepository
 from db_asyncpg.repositories.deals import DealRepository
 from db_asyncpg.repositories.message_archive import MessageArchiveRepo
@@ -81,6 +82,7 @@ from services.cash_requests.request_router_service import RequestRouterService
 from services.cash_requests.request_schedule_service import RequestScheduleService
 from services.cash_requests.schedule_coordinator import CashScheduleCoordinator
 from services.crm.cash_deal_source_adapter import CashDealSourceAdapter
+from services.crm.client_transfer_service import ClientTransferService
 from services.crm.deal_events import DealEventBus
 from services.crm.deal_service import DealService
 from services.crm.deal_source_adapter import DealSourceAdapterRegistry
@@ -172,6 +174,7 @@ class CrmServices:
     deals: DealService
     telegram_registrar: TelegramDealRegistrar
     source_mutation: DealSourceMutationService
+    client_transfers: ClientTransferService
 
 
 @dataclass(frozen=True, slots=True)
@@ -418,6 +421,9 @@ class ApplicationContainer:
                 deals=deal_service,
                 telegram_registrar=telegram_registrar,
                 source_mutation=source_mutation,
+                client_transfers=ClientTransferService(
+                    ClientTransferRepository(pool), event_bus
+                ),
             ),
             api_queries=api_queries,
             cash=CashServices(

@@ -15,6 +15,7 @@ class DealType(StrEnum):
     withdrawal = "withdrawal"
     delivery = "delivery"
     transfer_city = "transfer_city"
+    client_transfer = "client_transfer"
     conversion = "conversion"
     yuan = "yuan"
     invoice = "invoice"
@@ -50,6 +51,29 @@ class DealCreateRequest(BaseModel):
     profitRub: Decimal | None = None
     dealAt: date | None = None
     exchangeClientReqId: str | None = None
+
+
+class ClientTransferCreateRequest(BaseModel):
+    fromClientId: int = Field(gt=0)
+    toClientId: int = Field(gt=0)
+    amount: Decimal = Field(gt=0)
+    currency: str = Field(min_length=1, max_length=12)
+    idempotencyKey: str = Field(min_length=1, max_length=120)
+    comment: str | None = None
+    allowNegative: bool = False
+
+
+class DealFormClientDto(BaseModel):
+    id: str
+    name: str
+
+
+class DealFormContextDto(BaseModel):
+    cities: list[str]
+    counterparties: list[dict[str, str]]
+    clients: list[DealFormClientDto]
+    companyRates: dict[str, float]
+    defaultCounterpartyPercent: float
 
 
 class DealUpdateRequest(BaseModel):
@@ -147,6 +171,7 @@ class DealItemDto(BaseModel):
     asset: str
     direction: str
     amountRub: float
+    transferAmount: str | None = None
     city: str
     status: DealStatus
     insufficientUsdt: bool | None = None

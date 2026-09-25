@@ -302,7 +302,7 @@ CREATE TABLE IF NOT EXISTS deals (
     deal_no BIGINT NOT NULL DEFAULT nextval('request_id_seq'),   -- сквозной номер
     deal_type TEXT NOT NULL CHECK (deal_type IN
         ('sale','purchase','deposit','withdrawal','delivery','transfer_city',
-         'conversion','yuan','invoice','profit','best_change')),
+         'conversion','yuan','invoice','profit','best_change','client_transfer')),
     city TEXT NOT NULL DEFAULT 'Екб',
     client_id BIGINT REFERENCES clients(id),
     counterparty_id BIGINT REFERENCES counterparties(id),

@@ -377,6 +377,8 @@ def setup_handlers(
         silent_chat_ids=silent_accounting_chat_ids,
         city_cash_chats=city_cash_chats,
         cash_settlement_service=container.accounting.cash_settlements,
+        client_transfer_service=container.crm.client_transfers,
+        default_city=config.default_city,
     )
     if silent_accounting_chat_ids:
         silent_accounting_middleware = SilentAccountingChatsMiddleware(

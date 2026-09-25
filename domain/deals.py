@@ -18,6 +18,7 @@ class DealType(StrEnum):
     WITHDRAWAL = "withdrawal"
     DELIVERY = "delivery"
     TRANSFER_CITY = "transfer_city"
+    CLIENT_TRANSFER = "client_transfer"
     CONVERSION = "conversion"
     YUAN = "yuan"
     INVOICE = "invoice"

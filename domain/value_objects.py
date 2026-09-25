@@ -130,6 +130,7 @@ class SourceKind(StrEnum):
     PARTNER = "partner"
     BEST_CHANGE = "best_change"
     ACCOUNTING_IMPORT = "accounting_import"
+    CLIENT_TRANSFER = "client_transfer"
 
 
 def _decimal(value: object, *, field: str) -> Decimal:

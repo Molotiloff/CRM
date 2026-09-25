@@ -4,10 +4,17 @@ import asyncio
 import logging
 import re
 from collections.abc import Iterable, Mapping
+from decimal import Decimal, InvalidOperation
 
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from db_asyncpg.ports.workflows import ManagedClientWalletTransactionRepositoryPort
 from domain import DomainStateError, DomainValidationError
@@ -16,8 +23,16 @@ from services.accounting.cash_settlement_service import (
     CashSettlementError,
     CashSettlementService,
 )
+from services.crm.client_transfer_service import (
+    ClientTransferCommand,
+    ClientTransferResult,
+    ClientTransferService,
+)
 from services.number_formatting import format_amount_core
+from services.receipts import ReceiptImageBuilder, ReceiptRow
+from services.receipts.image import format_receipt_datetime
 from services.wallets import WalletInteractionService
+from services.wallets.command_parser import WalletCommandParser
 from services.wallets.models import CurrencyChangeCommand
 from telegram_adapters import ChatLockRegistry, CityCashMediaStore
 from telegram_adapters.auth import (
@@ -36,6 +51,7 @@ from telegram_adapters.statements import handle_stmt_callback
 
 _RE_PUBLIC_WALLET_CMD = r"(?iu)^/кош(?:@\w+)?(?:\s|$)"
 _RE_CASH_REQUEST_ID = re.compile(r"(?iu)^Б-\d+$")
+_TRANSFER_CURRENCIES = frozenset({"RUB", "USDT", "USD", "USDW", "EUR", "EUR500", "THB"})
 log = logging.getLogger("wallets")
 
 
@@ -53,6 +69,8 @@ class WalletsHandler:
         silent_chat_ids: Iterable[int] | None = None,
         city_cash_chats: Mapping[str, int] | None = None,
         cash_settlement_service: CashSettlementService | None = None,
+        client_transfer_service: ClientTransferService | None = None,
+        default_city: str = "екб",
     ) -> None:
         self.repo = repo
         self.admin_chat_ids = set(admin_chat_ids or [])
@@ -62,6 +80,9 @@ class WalletsHandler:
         self.city_cash_chats = dict(city_cash_chats or {})
         self.city_cash_chat_ids = set(self.city_cash_chats.values())
         self.cash_settlement_service = cash_settlement_service
+        self.client_transfer_service = client_transfer_service
+        self.receipt_builder = ReceiptImageBuilder()
+        self.default_city = default_city
         self._background_tasks: set[asyncio.Task[None]] = set()
         self.city_cash_media_store = city_cash_media_store
         self.chat_locks = chat_locks
@@ -103,6 +124,237 @@ class WalletsHandler:
             chat_name=get_chat_name(message),
         )
         await message.answer(result.message_text)
+
+    @manager_or_admin_message_required
+    async def _cmd_client_transfer(self, message: Message) -> None:
+        if self.client_transfer_service is None:
+            await message.answer("Переводы временно недоступны")
+            return
+        if message.chat.id in self.city_cash_chat_ids | self.silent_chat_ids | self.admin_chat_ids:
+            await message.answer("Перевод доступен только из клиентского чата")
+            return
+        try:
+            amount, currency, recipient_name = self._parse_transfer(message.text or "")
+            self._transfer_callback("pick", message.message_id, 1, currency, amount)
+        except ValueError as exc:
+            await message.answer(str(exc))
+            return
+        recipients = await self.client_transfer_service.find_recipients(recipient_name)
+        if not recipients:
+            await message.answer(f"Клиентский чат «{recipient_name}» не найден")
+            return
+        if len(recipients) > 1:
+            buttons = [
+                [InlineKeyboardButton(
+                    text=f"{item['name']} · {item['chat_id']}",
+                    callback_data=self._transfer_callback(
+                        "pick", message.message_id, int(item["id"]), currency, amount
+                    ),
+                )]
+                for item in recipients
+            ]
+            await message.answer(
+                "Есть несколько чатов с таким названием. Выберите получателя:",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            )
+            return
+        await self._execute_client_transfer(
+            message,
+            source_message_id=message.message_id,
+            recipient_id=int(recipients[0]["id"]),
+            amount=amount,
+            currency=currency,
+            actor_tg_user_id=message.from_user.id if message.from_user else None,
+        )
+
+    @staticmethod
+    def _parse_transfer(raw_text: str) -> tuple[Decimal, str, str]:
+        parts = raw_text.strip().split(maxsplit=2)
+        if len(parts) < 3:
+            raise ValueError(
+                "Использование: /перевод 1000 Имя чата или /перевод 100 USDT Имя чата"
+            )
+        try:
+            amount = Decimal(parts[1].replace(",", "."))
+        except InvalidOperation:
+            raise ValueError("Некорректная сумма перевода") from None
+        if not amount.is_finite() or amount <= 0:
+            raise ValueError("Сумма перевода должна быть больше нуля")
+        tail = parts[2].strip()
+        first, _, remainder = tail.partition(" ")
+        normalized = WalletCommandParser.normalize_code_alias(first)
+        if normalized in _TRANSFER_CURRENCIES and remainder.strip():
+            return amount, normalized, remainder.strip()
+        return amount, "RUB", tail
+
+    @staticmethod
+    def _transfer_callback(
+        phase: str, message_id: int, recipient_id: int, currency: str, amount: Decimal
+    ) -> str:
+        data = f"ct:{phase}:{message_id}:{recipient_id}:{currency}:{amount}"
+        if len(data.encode("utf-8")) > 64:
+            raise ValueError("Сумма слишком длинная для подтверждения в Telegram")
+        return data
+
+    async def _execute_client_transfer(
+        self,
+        message: Message,
+        *,
+        source_message_id: int,
+        recipient_id: int,
+        amount: Decimal,
+        currency: str,
+        allow_negative: bool = False,
+        actor_tg_user_id: int | None = None,
+    ) -> None:
+        assert self.client_transfer_service is not None
+        try:
+            result = await self.client_transfer_service.transfer(
+                ClientTransferCommand(
+                    amount=amount,
+                    currency=currency,
+                    source="tg_bot",
+                    source_ref=f"{message.chat.id}:{source_message_id}",
+                    city=self.default_city,
+                    from_chat_id=message.chat.id,
+                    to_client_id=recipient_id,
+                    allow_negative=allow_negative,
+                    actor_tg_user_id=actor_tg_user_id,
+                )
+            )
+        except DomainStateError as exc:
+            if "Недостаточно средств" not in str(exc) or allow_negative:
+                await message.answer(str(exc))
+                return
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="Подтвердить перевод",
+                        callback_data=self._transfer_callback(
+                            "confirm", source_message_id, recipient_id, currency, amount
+                        ),
+                    ),
+                    InlineKeyboardButton(
+                        text="Отклонить",
+                        callback_data=self._transfer_callback(
+                            "reject", source_message_id, recipient_id, currency, amount
+                        ),
+                    ),
+                ]
+            ])
+            await message.answer(
+                f"⚠️ Недостаточно {currency} на счёте отправителя. "
+                "После подтверждения баланс станет отрицательным. Провести перевод?",
+                reply_markup=keyboard,
+            )
+            return
+        except DomainValidationError as exc:
+            await message.answer(str(exc))
+            return
+        await self._report_client_transfer(message, result)
+
+    async def _report_client_transfer(
+        self, message: Message, result: ClientTransferResult
+    ) -> None:
+        suffix = " (повтор)" if result.repeated else ""
+        if not result.repeated and message.bot is not None:
+            try:
+                receipt = self.receipt_builder.build(
+                    amount=result.amount,
+                    currency=result.currency,
+                    precision=result.precision,
+                    rows=(
+                        ReceiptRow("Статус", "Проведено", accent=True),
+                        ReceiptRow("Номер операции", f"#{result.deal_id}"),
+                        ReceiptRow("Отправитель", result.from_client_name),
+                        ReceiptRow("Получатель", result.to_client_name),
+                        ReceiptRow("Дата и время", format_receipt_datetime(result.created_at)),
+                    ),
+                )
+            except Exception:
+                log.exception("Failed to build client transfer receipt deal_id=%s", result.deal_id)
+            else:
+                for chat_id in (message.chat.id, result.to_chat_id):
+                    try:
+                        await message.bot.send_photo(
+                            chat_id,
+                            BufferedInputFile(receipt, filename=f"client_transfer_{result.deal_id}.png"),
+                        )
+                    except Exception:
+                        log.exception(
+                            "Failed to send client transfer receipt deal_id=%s chat_id=%s",
+                            result.deal_id, chat_id,
+                        )
+        await message.answer(
+            f"Перевод #{result.deal_id} проведён{suffix}.\n"
+            f"Получатель: {result.to_client_name}\n"
+            f"Списано: {format_amount_core(result.amount, result.precision)} {result.currency}\n"
+            f"Баланс: {format_amount_core(result.from_balance, result.precision)} {result.currency}"
+        )
+        if not result.repeated and message.bot is not None:
+            try:
+                await message.bot.send_message(
+                    result.to_chat_id,
+                    f"Перевод #{result.deal_id} от {result.from_client_name}.\n"
+                    f"Зачислено: {format_amount_core(result.amount, result.precision)} {result.currency}\n"
+                    f"Баланс: {format_amount_core(result.to_balance, result.precision)} {result.currency}",
+                )
+            except Exception:
+                log.exception(
+                    "Failed to notify recipient of client transfer deal_id=%s chat_id=%s",
+                    result.deal_id, result.to_chat_id,
+                )
+
+    @manager_or_admin_callback_required
+    async def _cb_client_transfer(self, cq: CallbackQuery) -> None:
+        if not isinstance(cq.message, Message) or self.client_transfer_service is None:
+            await cq.answer("Сообщение недоступно", show_alert=True)
+            return
+        try:
+            _, phase, source_message_id, recipient_id, currency, raw_amount = (
+                cq.data or ""
+            ).split(":", maxsplit=5)
+            amount = Decimal(raw_amount)
+            parsed_source_message_id = int(source_message_id)
+            parsed_recipient_id = int(recipient_id)
+            if phase not in {"pick", "confirm", "reject"} or currency not in _TRANSFER_CURRENCIES:
+                raise ValueError
+        except (ValueError, InvalidOperation):
+            await cq.answer("Некорректное подтверждение", show_alert=True)
+            return
+        if phase == "reject":
+            try:
+                rejected = await self.client_transfer_service.reject(
+                    ClientTransferCommand(
+                        amount=amount,
+                        currency=currency,
+                        source="tg_bot",
+                        source_ref=f"{cq.message.chat.id}:{parsed_source_message_id}",
+                        city=self.default_city,
+                        from_chat_id=cq.message.chat.id,
+                        to_client_id=parsed_recipient_id,
+                        actor_tg_user_id=cq.from_user.id,
+                    )
+                )
+            except (DomainStateError, DomainValidationError) as exc:
+                await cq.answer(str(exc), show_alert=True)
+                return
+            await cq.message.edit_text(
+                "Перевод отклонён" if rejected else "Перевод уже проведён"
+            )
+            await cq.answer("Отклонено" if rejected else "Уже проведено")
+            return
+        await self._execute_client_transfer(
+            cq.message,
+            source_message_id=parsed_source_message_id,
+            recipient_id=parsed_recipient_id,
+            amount=amount,
+            currency=currency,
+            allow_negative=phase == "confirm",
+            actor_tg_user_id=cq.from_user.id,
+        )
+        await cq.message.edit_reply_markup(reply_markup=None)
+        await cq.answer()
 
     async def _on_currency_change(self, message: Message) -> None:
         if message.from_user and message.bot and message.from_user.id == message.bot.id:
@@ -428,6 +680,7 @@ class WalletsHandler:
         self.router.message.register(self._cmd_wallet, Command("кошелек"))
         self.router.message.register(self._cmd_addcur, Command("добавь"))
         self.router.message.register(self._cmd_rmcur, Command("удали"))
+        self.router.message.register(self._cmd_client_transfer, Command("перевод"))
 
         self.router.message.register(
             self._on_currency_change,
@@ -445,3 +698,4 @@ class WalletsHandler:
         self.router.callback_query.register(self._cb_rmcur, F.data.startswith("rmcur:"))
         self.router.callback_query.register(self._cb_undo, F.data.startswith("undo:"))
         self.router.callback_query.register(self._cb_statement, F.data.in_({"stmt:month", "stmt:all"}))
+        self.router.callback_query.register(self._cb_client_transfer, F.data.startswith("ct:"))

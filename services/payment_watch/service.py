@@ -22,10 +22,10 @@ from services.payment_watch.models import (
     PaymentWatchStarted,
     StartPaymentWatchCommand,
 )
-from services.payment_watch.receipt_image import PaymentReceiptImageBuilder
 from services.payment_watch.settlement_models import ConfirmedTransfer
 from services.payment_watch.settlement_service import DealSettlementService
 from services.payment_watch.tronscan_gateway import TronscanGateway, TronscanGatewayError
+from services.receipts import PaymentReceiptImageBuilder
 from services.wallets.text_builder import WalletTextBuilder
 
 
