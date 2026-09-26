@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import re
 import time
@@ -9,8 +10,10 @@ from typing import Any
 
 import requests
 
+from domain.tron_wallet import is_probable_tron_wallet
 from services.aml.getblock_parser import (
     extract_amlcheckup_from_redirect_header,
+    extract_checking_address,
     extract_csrf_from_html,
     find_hidden_csrf_field,
 )
@@ -214,6 +217,8 @@ class GetBlockAMLClient:
         direction: str,
         source: str,
         type_: str,
+        checking_address: str | None = None,
+        checking_tx_id: str = "",
     ) -> dict[str, Any]:
         page = self.get_riskscore_page()
         ajax_csrf = self._best_csrf_token(page.text)
@@ -235,8 +240,8 @@ class GetBlockAMLClient:
             "CheckingForm[currency_code]": currency_code,
             "CheckingForm[direction]": direction,
             "CheckingForm[source]": source,
-            "CheckingForm[checking_address]": wallet,
-            "CheckingForm[checking_tx_id]": "",
+            "CheckingForm[checking_address]": checking_address or wallet,
+            "CheckingForm[checking_tx_id]": checking_tx_id,
             "CheckingForm[aml_provider]": aml_provider,
         }
 
@@ -273,6 +278,72 @@ class GetBlockAMLClient:
             result["amlcheckup"] = amlcheckup
 
         return result
+
+    def get_transaction_check_form(
+        self,
+        *,
+        tx_hash: str,
+        currency_code: str,
+        aml_provider: str,
+        source: str,
+    ) -> str:
+        """Resolve the hidden address through GetBlock's hash-only quick-check form."""
+        ajax_csrf = self.refresh_ajax_csrf()
+        resp = self._post(
+            f"/{self.lang}/site/ajax",
+            data={
+                "method": "getCheckForm",
+                "checking_type": "1",
+                "currency_code": currency_code,
+                "checking_hash": tx_hash,
+                "source": source,
+                "hot_search": "true",
+                "aml_provider": aml_provider,
+            },
+            headers={
+                "accept": "*/*",
+                "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "origin": self.BASE,
+                "referer": self._url(f"/{self.lang}/riskscore"),
+                "x-requested-with": "XMLHttpRequest",
+                "x-csrf-token": ajax_csrf,
+            },
+            allow_redirects=True,
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(f"GetBlock не смог открыть форму транзакции: HTTP {resp.status_code}")
+        payload = resp.json()
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        if not isinstance(payload, dict) or not payload.get("success"):
+            raise RuntimeError("GetBlock не смог подготовить проверку транзакции")
+        address = extract_checking_address(str(payload.get("message") or ""))
+        if not address or not is_probable_tron_wallet(address):
+            raise RuntimeError("GetBlock не определил адрес для проверки по хэшу")
+        return address
+
+    def get_transaction_page(
+        self, *, tx_hash: str, amlcheckup: str, currency_code: str
+    ) -> dict[str, Any]:
+        ajax_csrf = self.refresh_ajax_csrf()
+        resp = self._post(
+            f"/{self.lang}/site/ajax",
+            data={"method": "getTxPage", "hash": tx_hash, "code": currency_code, "page": ""},
+            headers={
+                "accept": "*/*",
+                "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "origin": self.BASE,
+                "referer": self._url(
+                    f"/{self.lang}/{currency_code}/tx/{tx_hash}?amlcheckup={amlcheckup}"
+                ),
+                "x-requested-with": "XMLHttpRequest",
+                "x-csrf-token": ajax_csrf,
+            },
+            allow_redirects=True,
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(f"GetBlock не смог открыть страницу транзакции: HTTP {resp.status_code}")
+        return {"status_code": resp.status_code}
 
     def refresh_ajax_csrf(self) -> str:
         resp = self.get_riskscore_page()

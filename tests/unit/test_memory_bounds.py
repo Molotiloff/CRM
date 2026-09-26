@@ -12,14 +12,15 @@ from services.aml.aml_queue_service import (
     AMLQueueService,
     AMLQueueTask,
 )
+from services.aml.models import AMLCheckRequest
 from telegram_adapters.broadcast_models import TextBroadcastPayload
 from telegram_adapters.broadcast_session_store import AiogramBroadcastSessionStore
 from telegram_adapters.city_cash_media_store import CityCashMediaStore
 
 
 class _Checker:
-    async def check_wallet(self, wallet: str) -> dict[str, str]:
-        return {"wallet": wallet}
+    async def check_wallet(self, request: AMLCheckRequest) -> dict[str, str]:
+        return {"wallet": request.value}
 
 
 async def _callback(_value: object) -> None:
@@ -29,7 +30,7 @@ async def _callback(_value: object) -> None:
 async def test_aml_queue_rejects_tasks_when_full() -> None:
     queue = AMLQueueService(checker=_Checker(), max_queue_size=1)
     task = AMLQueueTask(
-        wallet="wallet",
+        request=AMLCheckRequest(value="wallet"),
         on_success=_callback,
         on_error=_callback,
     )

@@ -77,6 +77,17 @@ def find_hidden_csrf_field(html_text: str) -> str | None:
     return None
 
 
+def extract_checking_address(html_text: str) -> str | None:
+    soup = BeautifulSoup(html_text, "html.parser")
+    try:
+        field = soup.select_one('input[name="CheckingForm[checking_address]"]')
+        if field is None:
+            return None
+        return str(field.get("value") or "").strip() or None
+    finally:
+        _dispose_soup(soup)
+
+
 def extract_amlcheckup(obj: Any) -> str | None:
     text = obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False)
 
@@ -288,10 +299,10 @@ def _parse_report_preview_soup(
         risk_label_ru = "Средний уровень риска"
 
     def parse_source_group(title_en: str) -> list[str]:
-        groups = soup.select(".report-source-list .source")
+        groups = soup.select(".report-source-list .source, .cristal-item.source")
 
         for group in groups:
-            title_el = group.select_one(".source-title")
+            title_el = group.select_one(".source-title, .block-title")
             if not title_el:
                 continue
 
@@ -302,10 +313,12 @@ def _parse_report_preview_soup(
             items: list[str] = []
             for li in group.select(".source-list .item"):
                 item_text = re.sub(r"\s+", " ", li.get_text(" ", strip=True)).strip()
-                percent_match = re.search(r"(\d+(?:\.\d+)?)%$", item_text)
+                # В отчёте по транзакции за долей следует сумма, например
+                # "62.93% (~28314.03 USD)"; процент не обязан завершать строку.
+                percent_match = re.search(r"(\d+(?:[.,]\d+)?)\s*%", item_text)
                 if not percent_match:
                     continue
-                if float(percent_match.group(1)) == 0:
+                if float(percent_match.group(1).replace(",", ".")) == 0:
                     continue
                 item_text = item_text.replace("P2p", "P2P").replace("Atm", "ATM")
                 items.append(item_text)
@@ -359,8 +372,9 @@ def build_report_message(report_data: dict[str, Any]) -> str:
     suspicious_sources = report_data.get("suspicious_sources", [])
     dangerous_sources = report_data.get("dangerous_sources", [])
 
+    target_label = "Транзакция" if str(report_data.get("type", "")).lower() == "transaction" else "Адрес"
     parts = [
-        f"{asset_name} Адрес:",
+        f"{asset_name} {target_label}:",
         f"{hash_value}",
         "",
         f"{risk_emoji} {risk_label_ru}: {risk_percent}",

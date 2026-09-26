@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from observability import NULL_METRICS, MetricsRecorder, measured_operation
 from services.aml.checker import AMLCheckResult, AsyncAMLChecker
+from services.aml.models import AMLCheckRequest
 from services.lifecycle import ManagedTaskLifecycle
 
 log = logging.getLogger("aml_queue")
@@ -18,7 +19,7 @@ class AMLQueueFullError(RuntimeError):
 
 @dataclass(slots=True)
 class AMLQueueTask:
-    wallet: str
+    request: AMLCheckRequest
     on_success: Callable[[AMLCheckResult], Awaitable[None]]
     on_error: Callable[[Exception], Awaitable[None]]
 
@@ -60,7 +61,7 @@ class AMLQueueService(ManagedTaskLifecycle):
                     result = await self._check_wallet(task)
                     await task.on_success(result)
                 except Exception as e:  # noqa: BLE001 — worker reports task failures via callback
-                    log.warning("AML task failed wallet=%s err=%r", task.wallet, e)
+                    log.warning("AML task failed target=%s err=%r", task.request.value, e)
                     await task.on_error(e)
                 finally:
                     self._queue.task_done()
@@ -70,4 +71,4 @@ class AMLQueueService(ManagedTaskLifecycle):
 
     @measured_operation("aml.check_wallet")
     async def _check_wallet(self, task: AMLQueueTask) -> AMLCheckResult:
-        return await self._checker.check_wallet(task.wallet)
+        return await self._checker.check_wallet(task.request)

@@ -13,6 +13,7 @@ from api.routers import health
 from observability import InMemoryMetrics, measured_operation
 from services.aml import AMLQueueService
 from services.aml.aml_queue_service import AMLQueueTask
+from services.aml.models import AMLCheckRequest
 
 
 class MeasuredService:
@@ -119,8 +120,8 @@ def _accountant_user() -> ApiUser:
 
 async def test_aml_queue_publishes_pending_size_on_enqueue() -> None:
     class Checker:
-        async def check_wallet(self, wallet: str) -> dict[str, object]:
-            return {"wallet": wallet}
+        async def check_wallet(self, request: AMLCheckRequest) -> dict[str, object]:
+            return {"wallet": request.value}
 
     metrics = InMemoryMetrics()
     queue = AMLQueueService(checker=Checker(), metrics=metrics)
@@ -133,7 +134,7 @@ async def test_aml_queue_publishes_pending_size_on_enqueue() -> None:
 
     await queue.enqueue(
         AMLQueueTask(
-            wallet="wallet",
+            request=AMLCheckRequest(value="wallet"),
             on_success=on_success,
             on_error=on_error,
         )

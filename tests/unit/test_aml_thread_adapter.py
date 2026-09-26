@@ -7,6 +7,7 @@ import time
 import pytest
 
 from services.aml import ThreadedAMLChecker
+from services.aml.models import AMLCheckRequest
 
 
 class TrackingSyncAMLChecker:
@@ -15,13 +16,13 @@ class TrackingSyncAMLChecker:
 
     def check_wallet(
         self,
-        wallet: str,
+        request: AMLCheckRequest,
         *,
         cancellation_event: threading.Event | None = None,
     ) -> dict:
         self.thread_id = threading.get_ident()
         time.sleep(0.01)
-        return {"wallet": wallet}
+        return {"wallet": request.value}
 
 
 class CooperativeSyncAMLChecker:
@@ -31,7 +32,7 @@ class CooperativeSyncAMLChecker:
 
     def check_wallet(
         self,
-        wallet: str,
+        request: AMLCheckRequest,
         *,
         cancellation_event: threading.Event | None = None,
     ) -> dict:
@@ -40,7 +41,7 @@ class CooperativeSyncAMLChecker:
         if cancellation_event.wait(timeout=1):
             self.cancelled.set()
             raise RuntimeError("cancelled")
-        return {"wallet": wallet}
+        return {"wallet": request.value}
 
 
 async def test_aml_adapter_runs_sync_checker_outside_event_loop() -> None:
@@ -48,7 +49,7 @@ async def test_aml_adapter_runs_sync_checker_outside_event_loop() -> None:
     checker = ThreadedAMLChecker(sync_checker)
     event_loop_thread = threading.get_ident()
 
-    result = await checker.check_wallet("wallet")
+    result = await checker.check_wallet(AMLCheckRequest(value="wallet"))
 
     assert result == {"wallet": "wallet"}
     assert sync_checker.thread_id is not None
@@ -58,7 +59,7 @@ async def test_aml_adapter_runs_sync_checker_outside_event_loop() -> None:
 async def test_aml_adapter_cooperatively_cancels_sync_checker() -> None:
     sync_checker = CooperativeSyncAMLChecker()
     checker = ThreadedAMLChecker(sync_checker)
-    task = asyncio.create_task(checker.check_wallet("wallet"))
+    task = asyncio.create_task(checker.check_wallet(AMLCheckRequest(value="wallet")))
     while not sync_checker.started.is_set():
         await asyncio.sleep(0)
 

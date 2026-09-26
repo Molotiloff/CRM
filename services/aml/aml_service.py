@@ -11,6 +11,7 @@ from services.aml.getblock_parser import (
     parse_report_preview,
 )
 from services.aml.getblock_settings import GetBlockSettings
+from services.aml.models import AMLCheckRequest
 
 
 class AMLService:
@@ -29,7 +30,7 @@ class AMLService:
 
     def check_wallet(
         self,
-        wallet: str,
+        request: AMLCheckRequest,
         *,
         cancellation_event: threading.Event | None = None,
     ) -> AMLCheckResult:
@@ -38,7 +39,7 @@ class AMLService:
         try:
             return self._check_wallet(
                 client,
-                wallet,
+                request,
                 cancellation_event=cancellation_event,
             )
         finally:
@@ -47,21 +48,34 @@ class AMLService:
     def _check_wallet(
         self,
         client: GetBlockAMLClient,
-        wallet: str,
+        request: AMLCheckRequest,
         *,
         cancellation_event: threading.Event | None = None,
     ) -> AMLCheckResult:
         client.login()
         self._raise_if_cancelled(cancellation_event)
+        checking_address = request.value
+        if request.kind == "transaction":
+            checking_address = client.get_transaction_check_form(
+                tx_hash=request.value,
+                currency_code="USDTTRC20",
+                aml_provider=self.settings.aml_provider,
+                source=self.settings.source,
+            )
+            self._raise_if_cancelled(cancellation_event)
         create_resp = client.create_check(
-            wallet=wallet,
-            currency_code=self.settings.currency_code,
-            token_id=self.settings.token_id,
+            wallet=request.value,
+            currency_code=(
+                self.settings.currency_code if request.network == "trc20" else request.currency_code
+            ),
+            token_id=self.settings.token_id if request.network == "trc20" else request.token_id,
             user_id=self.settings.user_id,
             aml_provider=self.settings.aml_provider,
-            direction=self.settings.direction,
+            direction="1" if request.kind == "transaction" else self.settings.direction,
             source=self.settings.source,
-            type_=self.settings.type_,
+            type_="1" if request.kind == "transaction" else self.settings.type_,
+            checking_address=checking_address,
+            checking_tx_id=request.value if request.kind == "transaction" else "",
         )
 
         amlcheckup = create_resp.get("amlcheckup") or extract_amlcheckup(create_resp)
@@ -69,11 +83,20 @@ class AMLService:
             raise RuntimeError("amlcheckup не найден в ответе GetBlock")
 
         self._raise_if_cancelled(cancellation_event)
-        client.get_address_page(
-            wallet=wallet,
-            amlcheckup=amlcheckup,
-            currency_code=self.settings.currency_code,
-        )
+        if request.kind == "address":
+            client.get_address_page(
+                wallet=request.value,
+                amlcheckup=amlcheckup,
+                currency_code=(
+                    self.settings.currency_code if request.network == "trc20" else request.currency_code
+                ),
+            )
+        else:
+            client.get_transaction_page(
+                tx_hash=request.value,
+                amlcheckup=amlcheckup,
+                currency_code=self.settings.currency_code,
+            )
 
         report_data = None
         preview_link = f"{client.BASE}/{self.settings.lang}/report-preview/{amlcheckup}"
@@ -104,7 +127,7 @@ class AMLService:
         message_text = build_report_message(report_data)
 
         return {
-            "wallet": wallet,
+            "wallet": request.value,
             "amlcheckup": amlcheckup,
             "message_text": message_text,
             "report_data": report_data,

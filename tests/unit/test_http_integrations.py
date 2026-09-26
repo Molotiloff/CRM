@@ -10,6 +10,7 @@ import services.xe_api as xe_api_module
 from gutils.requests_sheet import _execute
 from services.aml.aml_service import AMLService
 from services.aml.getblock_client import GetBlockAMLClient
+from services.aml.models import AMLCheckRequest
 from services.http_policy import HttpRetryPolicy, HttpTimeoutPolicy
 from services.payment_watch.tronscan_gateway import (
     TronscanGateway,
@@ -178,7 +179,7 @@ def test_aml_service_closes_getblock_client_on_failure() -> None:
     service._check_wallet = Mock(side_effect=RuntimeError("failed"))
 
     with pytest.raises(RuntimeError, match="failed"):
-        service.check_wallet("wallet")
+        service.check_wallet(AMLCheckRequest(value="wallet"))
 
     client.close.assert_called_once_with()
 
