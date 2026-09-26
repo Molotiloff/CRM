@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
+from handlers.broadcast_all import BroadcastAllHandler
 from services.broadcast import (
     BroadcastCommand,
     BroadcastDeliveryStatus,
     BroadcastService,
 )
+from telegram_adapters.broadcast_session_store import AiogramBroadcastSessionStore
 
 
 class ClientRepoStub:
@@ -79,3 +82,22 @@ def test_command_parser_and_target_text_are_transport_neutral() -> None:
     assert BroadcastService.extract_group_from_command("/всем") is None
     assert BroadcastService.target_label("partners") == "для группы «partners»"
     assert BroadcastService.empty_clients_text(None) == "Нет активных клиентов для рассылки."
+
+
+def test_broadcast_reply_filter_does_not_consume_transfer_receipts() -> None:
+    store = AiogramBroadcastSessionStore()
+    handler = object.__new__(BroadcastAllHandler)
+    handler.session_store = store
+    handler.admin_chat_ids = {-100}
+
+    def reply(chat_id: int, message_id: int):
+        return SimpleNamespace(
+            chat=SimpleNamespace(id=chat_id),
+            reply_to_message=SimpleNamespace(message_id=message_id),
+        )
+
+    assert not handler._is_broadcast_reply(reply(-200, 599))
+    assert not handler._is_broadcast_reply(reply(-100, 599))
+    store.add_prompt(chat_id=-100, prompt_message_id=42, group=None)
+    assert handler._is_broadcast_reply(reply(-100, 42))
+    assert not handler._is_broadcast_reply(reply(-100, 599))

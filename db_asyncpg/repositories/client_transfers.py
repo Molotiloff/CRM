@@ -6,7 +6,12 @@ from decimal import Decimal, InvalidOperation
 import asyncpg
 
 from domain import DomainStateError, DomainValidationError
-from services.crm.client_transfer_models import ClientTransferCommand, ClientTransferResult
+from services.crm.client_transfer_models import (
+    ClientTransferAdjustmentCommand,
+    ClientTransferAdjustmentResult,
+    ClientTransferCommand,
+    ClientTransferResult,
+)
 
 
 class ClientTransferRepository:
@@ -225,6 +230,149 @@ class ClientTransferRepository:
                     deal_id, command.actor_user_id,
                 )
         return True
+
+    async def adjust(
+        self, command: ClientTransferAdjustmentCommand
+    ) -> ClientTransferAdjustmentResult:
+        if command.deal_id <= 0 or not command.source_ref.strip():
+            raise DomainValidationError("Некорректная операция перевода")
+        new_amount = (
+            Decimal("0") if command.new_amount is None
+            else self._validate_adjustment_amount(command.new_amount)
+        )
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                deal = await connection.fetchrow(
+                    """SELECT id, status, source, source_kind, body
+                       FROM deals WHERE id=$1 FOR UPDATE""",
+                    command.deal_id,
+                )
+                if deal is None or deal["source"] != "tg_bot" or deal["source_kind"] != "client_transfer":
+                    raise DomainValidationError("Чек перевода не найден")
+                body = deal["body"]
+                if isinstance(body, str):
+                    body = json.loads(body)
+                sender_chat_id = await connection.fetchval(
+                    "SELECT chat_id FROM clients WHERE id=$1", body["from_client_id"]
+                )
+                if sender_chat_id != command.from_chat_id:
+                    raise DomainValidationError("Изменить перевод можно только в чате отправителя")
+
+                prior = await connection.fetchrow(
+                    """SELECT deal_id, old_amount, new_amount
+                       FROM client_transfer_adjustments WHERE source_ref=$1""",
+                    command.source_ref,
+                )
+                if prior is not None:
+                    if prior["deal_id"] != command.deal_id or prior["new_amount"] != new_amount:
+                        raise DomainStateError("Эта команда уже использована для другой корректировки")
+                    repeated = True
+                else:
+                    repeated = False
+                    if deal["status"] != "done":
+                        raise DomainStateError("Перевод уже отменён")
+
+                accounts = await connection.fetch(
+                    """SELECT id, client_id, precision, balance FROM client_accounts
+                       WHERE client_id=ANY($1::bigint[]) AND currency_code=$2 AND is_active
+                       ORDER BY id FOR UPDATE""",
+                    [body["from_client_id"], body["to_client_id"]], body["currency"],
+                )
+                by_client = {row["client_id"]: row for row in accounts}
+                if len(by_client) != 2:
+                    raise DomainStateError("Счёт отправителя или получателя недоступен")
+                debit = by_client[body["from_client_id"]]
+                credit = by_client[body["to_client_id"]]
+                precision = int(debit["precision"])
+                if credit["precision"] != precision:
+                    raise DomainStateError("Точность счетов не совпадает")
+                quantum = Decimal(1).scaleb(-precision)
+                if new_amount != new_amount.quantize(quantum):
+                    raise DomainValidationError(
+                        f"Для {body['currency']} допускается не более {precision} знаков после запятой"
+                    )
+                if repeated:
+                    old_amount = Decimal(str(prior["old_amount"]))
+                else:
+                    old_amount = Decimal(str(body["amount"]))
+                delta = new_amount - old_amount
+                from_balance = Decimal(str(debit["balance"])) - (delta if not repeated else 0)
+                to_balance = Decimal(str(credit["balance"])) + (delta if not repeated else 0)
+                if (
+                    not repeated and delta != 0 and not command.allow_negative
+                    and (from_balance < 0 or to_balance < 0)
+                ):
+                    raise DomainStateError("Недостаточно средств для корректировки перевода")
+
+                if not repeated and delta != 0:
+                    adjustment_id = await connection.fetchval(
+                        """INSERT INTO client_transfer_adjustments
+                             (deal_id, source_ref, old_amount, new_amount, actor_tg_user_id)
+                           VALUES ($1, $2, $3, $4, $5) RETURNING id""",
+                        command.deal_id, command.source_ref, old_amount, new_amount,
+                        command.actor_tg_user_id,
+                    )
+                    for account, amount, balance in (
+                        (debit, -delta, from_balance),
+                        (credit, delta, to_balance),
+                    ):
+                        await connection.execute(
+                            "UPDATE client_accounts SET balance=$2 WHERE id=$1",
+                            account["id"], balance,
+                        )
+                        await connection.execute(
+                            """INSERT INTO transactions
+                                 (client_id, account_id, amount, balance_after, comment,
+                                  source, idempotency_key)
+                               VALUES ($1, $2, $3, $4, $5, 'client_transfer_adjustment', $6)""",
+                            account["client_id"], account["id"], amount, balance,
+                            f"Корректировка перевода #{command.deal_id}: {old_amount} → {new_amount}",
+                            f"client_transfer_adjustment:{adjustment_id}",
+                        )
+                    body["amount"] = str(new_amount)
+                    await connection.execute(
+                        "UPDATE deals SET body=$2::jsonb, status=$3, updated_at=NOW() WHERE id=$1",
+                        command.deal_id, json.dumps(body, ensure_ascii=False),
+                        "canceled" if new_amount == 0 else "done",
+                    )
+                    if new_amount == 0:
+                        await connection.execute(
+                            """INSERT INTO deal_status_events
+                                 (deal_id, old_status, new_status, payload)
+                               VALUES ($1, 'done', 'canceled', $2::jsonb)""",
+                            command.deal_id, json.dumps({"adjustment_id": adjustment_id}),
+                        )
+                elif not repeated:
+                    # Same amount is a no-op: the command must not create an audit row.
+                    repeated = True
+
+                to_chat_id = await connection.fetchval(
+                    "SELECT chat_id FROM clients WHERE id=$1", body["to_client_id"]
+                )
+                return ClientTransferAdjustmentResult(
+                    deal_id=command.deal_id,
+                    from_client_name=body["from_client_name"],
+                    to_client_name=body["to_client_name"],
+                    to_chat_id=int(to_chat_id),
+                    from_balance=from_balance,
+                    to_balance=to_balance,
+                    old_amount=old_amount,
+                    new_amount=new_amount,
+                    currency=body["currency"],
+                    precision=precision,
+                    canceled=new_amount == 0,
+                    repeated=repeated,
+                )
+
+    @staticmethod
+    def _validate_adjustment_amount(value: Decimal) -> Decimal:
+        try:
+            amount = Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError):
+            raise DomainValidationError("Некорректная сумма перевода") from None
+        if not amount.is_finite() or amount <= 0:
+            raise DomainValidationError("Сумма перевода должна быть больше нуля")
+        return amount
 
     @staticmethod
     async def _client(

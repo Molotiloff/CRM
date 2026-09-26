@@ -7,7 +7,11 @@ import pytest
 from db_asyncpg.repositories.client_transfers import ClientTransferRepository
 from db_asyncpg.repositories.clients import ClientsRepo
 from domain import DomainStateError, DomainValidationError
-from services.crm.client_transfer_service import ClientTransferCommand, ClientTransferService
+from services.crm.client_transfer_service import (
+    ClientTransferAdjustmentCommand,
+    ClientTransferCommand,
+    ClientTransferService,
+)
 from services.crm.deal_events import DealEventBus
 
 
@@ -164,3 +168,74 @@ async def test_rejected_transfer_cannot_be_confirmed_later(pool) -> None:
     assert balance == Decimal("100")
     assert txn_count == 0
     assert deal_status == "canceled"
+
+
+@pytest.mark.asyncio
+async def test_transfer_amount_can_be_corrected_and_canceled_append_only(pool) -> None:
+    sender, recipient = await _clients(pool)
+    service = ClientTransferService(ClientTransferRepository(pool), DealEventBus())
+    original = await service.transfer(_command(recipient_id=recipient))
+
+    correction = ClientTransferAdjustmentCommand(
+        deal_id=original.deal_id, from_chat_id=-700001,
+        source_ref="-700001:124", new_amount=Decimal("40"),
+    )
+    changed = await service.adjust(correction)
+    repeated = await service.adjust(correction)
+    assert changed.old_amount == Decimal("25")
+    assert changed.new_amount == Decimal("40")
+    assert changed.from_balance == Decimal("60")
+    assert changed.to_balance == Decimal("40")
+    assert repeated.repeated
+
+    canceled = await service.adjust(ClientTransferAdjustmentCommand(
+        deal_id=original.deal_id, from_chat_id=-700001,
+        source_ref="-700001:125", new_amount=None,
+    ))
+    assert canceled.from_balance == Decimal("100")
+    assert canceled.to_balance == Decimal("0")
+    async with pool.acquire() as connection:
+        legs = await connection.fetch(
+            "SELECT client_id, amount FROM transactions ORDER BY id"
+        )
+        history = await connection.fetch(
+            "SELECT old_amount, new_amount FROM client_transfer_adjustments ORDER BY id"
+        )
+        status = await connection.fetchval(
+            "SELECT status FROM deals WHERE id=$1", original.deal_id
+        )
+    assert [(row["client_id"], row["amount"]) for row in legs] == [
+        (sender, Decimal("-25")), (recipient, Decimal("25")),
+        (sender, Decimal("-15")), (recipient, Decimal("15")),
+        (sender, Decimal("40")), (recipient, Decimal("-40")),
+    ]
+    assert [(row["old_amount"], row["new_amount"]) for row in history] == [
+        (Decimal("25"), Decimal("40")), (Decimal("40"), Decimal("0")),
+    ]
+    assert status == "canceled"
+
+
+@pytest.mark.asyncio
+async def test_transfer_adjustment_checks_sender_and_negative_balance(pool) -> None:
+    _, recipient = await _clients(pool)
+    service = ClientTransferService(ClientTransferRepository(pool), DealEventBus())
+    original = await service.transfer(_command(recipient_id=recipient))
+    wrong_chat = ClientTransferAdjustmentCommand(
+        deal_id=original.deal_id, from_chat_id=-700002,
+        source_ref="-700002:124", new_amount=Decimal("30"),
+    )
+    with pytest.raises(DomainValidationError, match="чате отправителя"):
+        await service.adjust(wrong_chat)
+    large = ClientTransferAdjustmentCommand(
+        deal_id=original.deal_id, from_chat_id=-700001,
+        source_ref="-700001:125", new_amount=Decimal("125"),
+    )
+    with pytest.raises(DomainStateError, match="Недостаточно средств"):
+        await service.adjust(large)
+    confirmed = await service.adjust(ClientTransferAdjustmentCommand(
+        deal_id=large.deal_id, from_chat_id=large.from_chat_id,
+        source_ref=large.source_ref, new_amount=large.new_amount,
+        allow_negative=True,
+    ))
+    assert confirmed.from_balance == Decimal("-25")
+    assert confirmed.to_balance == Decimal("125")

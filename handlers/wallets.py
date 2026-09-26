@@ -24,6 +24,8 @@ from services.accounting.cash_settlement_service import (
     CashSettlementService,
 )
 from services.crm.client_transfer_service import (
+    ClientTransferAdjustmentCommand,
+    ClientTransferAdjustmentResult,
     ClientTransferCommand,
     ClientTransferResult,
     ClientTransferService,
@@ -52,6 +54,7 @@ from telegram_adapters.statements import handle_stmt_callback
 _RE_PUBLIC_WALLET_CMD = r"(?iu)^/кош(?:@\w+)?(?:\s|$)"
 _RE_CASH_REQUEST_ID = re.compile(r"(?iu)^Б-\d+$")
 _TRANSFER_CURRENCIES = frozenset({"RUB", "USDT", "USD", "USDW", "EUR", "EUR500", "THB"})
+_TRANSFER_RECEIPT_CAPTION = re.compile(r"^Перевод #(\d+)$")
 log = logging.getLogger("wallets")
 
 
@@ -133,6 +136,21 @@ class WalletsHandler:
         if message.chat.id in self.city_cash_chat_ids | self.silent_chat_ids | self.admin_chat_ids:
             await message.answer("Перевод доступен только из клиентского чата")
             return
+        receipt_deal_id = self._replied_transfer_id(message)
+        if receipt_deal_id is not None:
+            parts = (message.text or "").strip().split()
+            if len(parts) != 2:
+                await message.answer("Для изменения ответьте на чек: /перевод <новая сумма>")
+                return
+            try:
+                new_amount = Decimal(parts[1].replace(",", "."))
+                if not new_amount.is_finite() or new_amount <= 0:
+                    raise InvalidOperation
+            except InvalidOperation:
+                await message.answer("Некорректная сумма перевода")
+                return
+            await self._execute_transfer_adjustment(message, receipt_deal_id, new_amount)
+            return
         try:
             amount, currency, recipient_name = self._parse_transfer(message.text or "")
             self._transfer_callback("pick", message.message_id, 1, currency, amount)
@@ -166,6 +184,117 @@ class WalletsHandler:
             currency=currency,
             actor_tg_user_id=message.from_user.id if message.from_user else None,
         )
+
+    @staticmethod
+    def _replied_transfer_id(message: Message) -> int | None:
+        reply = message.reply_to_message
+        if not reply or not reply.photo or not reply.from_user or not message.bot:
+            return None
+        if reply.from_user.id != message.bot.id:
+            return None
+        match = _TRANSFER_RECEIPT_CAPTION.fullmatch((reply.caption or "").strip())
+        return int(match.group(1)) if match else None
+
+    @manager_or_admin_message_required
+    async def _cmd_cancel_transfer(self, message: Message) -> None:
+        if self.client_transfer_service is None:
+            await message.answer("Переводы временно недоступны")
+            return
+        deal_id = self._replied_transfer_id(message)
+        if deal_id is None:
+            await message.answer("Ответьте командой /отмена на чек перевода в чате отправителя")
+            return
+        await self._execute_transfer_adjustment(message, deal_id, None)
+
+    async def _execute_transfer_adjustment(
+        self,
+        message: Message,
+        deal_id: int,
+        new_amount: Decimal | None,
+        *,
+        source_message_id: int | None = None,
+        allow_negative: bool = False,
+        actor_tg_user_id: int | None = None,
+    ) -> None:
+        assert self.client_transfer_service is not None
+        source_message_id = source_message_id or message.message_id
+        try:
+            result = await self.client_transfer_service.adjust(ClientTransferAdjustmentCommand(
+                deal_id=deal_id,
+                from_chat_id=message.chat.id,
+                source_ref=f"{message.chat.id}:{source_message_id}",
+                new_amount=new_amount,
+                actor_tg_user_id=actor_tg_user_id or (message.from_user.id if message.from_user else None),
+                allow_negative=allow_negative,
+            ))
+        except DomainStateError as exc:
+            if "Недостаточно средств" not in str(exc) or allow_negative:
+                await message.answer(str(exc))
+                return
+            raw_amount = "cancel" if new_amount is None else str(new_amount)
+            data = f"cta:{deal_id}:{source_message_id}:{raw_amount}"
+            if len(data.encode("utf-8")) > 64:
+                await message.answer("Сумма слишком длинная для подтверждения в Telegram")
+                return
+            await message.answer(
+                "⚠️ После корректировки баланс одного из клиентов станет отрицательным. "
+                "Подтвердить операцию?",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="Подтвердить", callback_data=data),
+                    InlineKeyboardButton(text="Отклонить", callback_data="cta:reject"),
+                ]]),
+            )
+            return
+        except DomainValidationError as exc:
+            await message.answer(str(exc))
+            return
+        await self._report_transfer_adjustment(message, result)
+
+    async def _report_transfer_adjustment(
+        self, message: Message, result: ClientTransferAdjustmentResult
+    ) -> None:
+        if result.repeated:
+            await message.answer("Эта корректировка уже применена или сумма не изменилась")
+            return
+        status = "отменён" if result.canceled else "изменён"
+        amount = format_amount_core(result.new_amount, result.precision)
+        if not result.canceled and message.bot is not None:
+            try:
+                receipt = self.receipt_builder.build(
+                    amount=result.new_amount,
+                    currency=result.currency,
+                    precision=result.precision,
+                    rows=(
+                        ReceiptRow("Статус", "Изменено", accent=True),
+                        ReceiptRow("Номер операции", f"#{result.deal_id}"),
+                        ReceiptRow("Отправитель", result.from_client_name),
+                        ReceiptRow("Получатель", result.to_client_name),
+                        ReceiptRow("Дата и время", format_receipt_datetime(message.date)),
+                    ),
+                )
+                for chat_id in (message.chat.id, result.to_chat_id):
+                    await message.bot.send_photo(
+                        chat_id,
+                        BufferedInputFile(receipt, filename=f"client_transfer_{result.deal_id}_updated.png"),
+                        caption=f"Перевод #{result.deal_id}",
+                    )
+            except Exception:
+                log.exception("Failed to send corrected transfer receipt deal_id=%s", result.deal_id)
+        await message.answer(
+            f"Перевод #{result.deal_id} {status}.\n"
+            f"Сумма: {amount} {result.currency}\n"
+            f"Баланс: {format_amount_core(result.from_balance, result.precision)} {result.currency}"
+        )
+        if message.bot is not None:
+            try:
+                await message.bot.send_message(
+                    result.to_chat_id,
+                    f"Перевод #{result.deal_id} {status}.\n"
+                    f"Сумма: {amount} {result.currency}\n"
+                    f"Баланс: {format_amount_core(result.to_balance, result.precision)} {result.currency}",
+                )
+            except Exception:
+                log.exception("Failed to notify transfer adjustment deal_id=%s", result.deal_id)
 
     @staticmethod
     def _parse_transfer(raw_text: str) -> tuple[Decimal, str, str]:
@@ -279,6 +408,7 @@ class WalletsHandler:
                         await message.bot.send_photo(
                             chat_id,
                             BufferedInputFile(receipt, filename=f"client_transfer_{result.deal_id}.png"),
+                            caption=f"Перевод #{result.deal_id}",
                         )
                     except Exception:
                         log.exception(
@@ -351,6 +481,31 @@ class WalletsHandler:
             amount=amount,
             currency=currency,
             allow_negative=phase == "confirm",
+            actor_tg_user_id=cq.from_user.id,
+        )
+        await cq.message.edit_reply_markup(reply_markup=None)
+        await cq.answer()
+
+    @manager_or_admin_callback_required
+    async def _cb_transfer_adjustment(self, cq: CallbackQuery) -> None:
+        if not isinstance(cq.message, Message) or self.client_transfer_service is None:
+            await cq.answer("Сообщение недоступно", show_alert=True)
+            return
+        if cq.data == "cta:reject":
+            await cq.message.edit_reply_markup(reply_markup=None)
+            await cq.answer("Отклонено")
+            return
+        try:
+            _, raw_deal_id, raw_source_id, raw_amount = (cq.data or "").split(":", 3)
+            deal_id = int(raw_deal_id)
+            source_id = int(raw_source_id)
+            new_amount = None if raw_amount == "cancel" else Decimal(raw_amount)
+        except (ValueError, InvalidOperation):
+            await cq.answer("Некорректное подтверждение", show_alert=True)
+            return
+        await self._execute_transfer_adjustment(
+            cq.message, deal_id, new_amount,
+            source_message_id=source_id, allow_negative=True,
             actor_tg_user_id=cq.from_user.id,
         )
         await cq.message.edit_reply_markup(reply_markup=None)
@@ -681,6 +836,7 @@ class WalletsHandler:
         self.router.message.register(self._cmd_addcur, Command("добавь"))
         self.router.message.register(self._cmd_rmcur, Command("удали"))
         self.router.message.register(self._cmd_client_transfer, Command("перевод"))
+        self.router.message.register(self._cmd_cancel_transfer, Command("отмена"))
 
         self.router.message.register(
             self._on_currency_change,
@@ -699,3 +855,4 @@ class WalletsHandler:
         self.router.callback_query.register(self._cb_undo, F.data.startswith("undo:"))
         self.router.callback_query.register(self._cb_statement, F.data.in_({"stmt:month", "stmt:all"}))
         self.router.callback_query.register(self._cb_client_transfer, F.data.startswith("ct:"))
+        self.router.callback_query.register(self._cb_transfer_adjustment, F.data.startswith("cta:"))

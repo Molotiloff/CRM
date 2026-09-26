@@ -35,3 +35,29 @@ class ClientTransferResult:
     precision: int
     created_at: datetime
     repeated: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ClientTransferAdjustmentCommand:
+    deal_id: int
+    from_chat_id: int
+    source_ref: str
+    new_amount: Decimal | None  # None cancels the transfer.
+    actor_tg_user_id: int | None = None
+    allow_negative: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ClientTransferAdjustmentResult:
+    deal_id: int
+    from_client_name: str
+    to_client_name: str
+    to_chat_id: int
+    from_balance: Decimal
+    to_balance: Decimal
+    old_amount: Decimal
+    new_amount: Decimal
+    currency: str
+    precision: int
+    canceled: bool
+    repeated: bool

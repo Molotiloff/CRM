@@ -102,6 +102,17 @@ class BroadcastAllHandler:
             prompt_message_id=reply_msg.message_id,
         )
 
+    def _is_broadcast_reply(self, message: Message) -> bool:
+        reply_msg = message.reply_to_message
+        return bool(
+            reply_msg
+            and message.chat.id in self.admin_chat_ids
+            and self.session_store.is_pending_prompt(
+                chat_id=message.chat.id,
+                prompt_message_id=reply_msg.message_id,
+            )
+        )
+
     async def _collect_and_preview_media_group(self, message: Message) -> None:
         key = self.session_store.add_media_group_message(
             chat_id=message.chat.id,
@@ -226,7 +237,7 @@ class BroadcastAllHandler:
         self.router.message.register(self._cmd_all, Command("всем"))
         self.router.message.register(
             self._handle_broadcast_reply,
-            F.reply_to_message.as_("reply_to_message"),
+            self._is_broadcast_reply,
         )
         self.router.callback_query.register(
             self._handle_broadcast_action,
