@@ -237,8 +237,7 @@ class WalletsHandler:
                 await message.answer("Сумма слишком длинная для подтверждения в Telegram")
                 return
             await message.answer(
-                "⚠️ После корректировки баланс одного из клиентов станет отрицательным. "
-                "Подтвердить операцию?",
+                f"⚠️ {exc}\nПодтвердить операцию?",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                     InlineKeyboardButton(text="Подтвердить", callback_data=data),
                     InlineKeyboardButton(text="Отклонить", callback_data="cta:reject"),
@@ -372,8 +371,7 @@ class WalletsHandler:
                 ]
             ])
             await message.answer(
-                f"⚠️ Недостаточно {currency} на счёте отправителя. "
-                "После подтверждения баланс станет отрицательным. Провести перевод?",
+                f"⚠️ {exc}\nПровести перевод?",
                 reply_markup=keyboard,
             )
             return

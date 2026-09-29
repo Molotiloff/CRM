@@ -239,3 +239,80 @@ async def test_transfer_adjustment_checks_sender_and_negative_balance(pool) -> N
     ))
     assert confirmed.from_balance == Decimal("-25")
     assert confirmed.to_balance == Decimal("125")
+
+
+@pytest.mark.asyncio
+async def test_cancel_credits_already_negative_sender_without_confirmation(pool) -> None:
+    sender, recipient = await _clients(pool)
+    async with pool.acquire() as connection:
+        await connection.execute(
+            "UPDATE client_accounts SET balance=-400 WHERE client_id=$1 AND currency_code='RUB'",
+            sender,
+        )
+    service = ClientTransferService(ClientTransferRepository(pool), DealEventBus())
+    original = await service.transfer(_command(
+        recipient_id=recipient, amount="1000", allow_negative=True,
+    ))
+    assert original.from_balance == Decimal("-1400")
+
+    canceled = await service.adjust(ClientTransferAdjustmentCommand(
+        deal_id=original.deal_id,
+        from_chat_id=-700001,
+        source_ref="-700001:124",
+        new_amount=None,
+    ))
+    assert canceled.canceled
+    assert canceled.from_balance == Decimal("-400")
+    assert canceled.to_balance == Decimal("0")
+
+
+@pytest.mark.asyncio
+async def test_extra_transfer_from_negative_balance_has_accurate_warning(pool) -> None:
+    sender, recipient = await _clients(pool)
+    async with pool.acquire() as connection:
+        await connection.execute(
+            "UPDATE client_accounts SET balance=-400 WHERE client_id=$1 AND currency_code='RUB'",
+            sender,
+        )
+    service = ClientTransferService(ClientTransferRepository(pool), DealEventBus())
+    with pytest.raises(DomainStateError, match="уже отрицательный.*-500"):
+        await service.transfer(_command(recipient_id=recipient, amount="100"))
+    original = await service.transfer(_command(
+        recipient_id=recipient, amount="100", allow_negative=True,
+    ))
+    with pytest.raises(DomainStateError, match="уже отрицательный.*-600"):
+        await service.adjust(ClientTransferAdjustmentCommand(
+            deal_id=original.deal_id,
+            from_chat_id=-700001,
+            source_ref="-700001:124",
+            new_amount=Decimal("200"),
+        ))
+
+
+@pytest.mark.asyncio
+async def test_cancel_requires_confirmation_only_if_recipient_debit_goes_negative(pool) -> None:
+    _, recipient = await _clients(pool)
+    service = ClientTransferService(ClientTransferRepository(pool), DealEventBus())
+    original = await service.transfer(_command(recipient_id=recipient, amount="50"))
+    async with pool.acquire() as connection:
+        await connection.execute(
+            "UPDATE client_accounts SET balance=10 WHERE client_id=$1 AND currency_code='RUB'",
+            recipient,
+        )
+    command = ClientTransferAdjustmentCommand(
+        deal_id=original.deal_id,
+        from_chat_id=-700001,
+        source_ref="-700001:124",
+        new_amount=None,
+    )
+    with pytest.raises(DomainStateError, match="счёте получателя.*-40"):
+        await service.adjust(command)
+    canceled = await service.adjust(ClientTransferAdjustmentCommand(
+        deal_id=command.deal_id,
+        from_chat_id=command.from_chat_id,
+        source_ref=command.source_ref,
+        new_amount=None,
+        allow_negative=True,
+    ))
+    assert canceled.canceled
+    assert canceled.to_balance == Decimal("-40")

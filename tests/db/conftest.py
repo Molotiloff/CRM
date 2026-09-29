@@ -77,7 +77,8 @@ RESTART IDENTITY CASCADE
 def test_database_url() -> str:
     url, managed = managed_test_database_url()
     if not managed:
-        return url
+        yield url
+        return
 
     if not (shutil.which("createdb") and shutil.which("dropdb")):
         pytest.skip("createdb/dropdb не найдены — задайте TEST_DATABASE_URL")

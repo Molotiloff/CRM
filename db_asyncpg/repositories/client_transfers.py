@@ -93,10 +93,20 @@ class ClientTransferRepository:
                     raise DomainValidationError(
                         f"Для {command.currency.upper()} допускается не более {precision} знаков после запятой"
                     )
-                from_balance = Decimal(str(debit["balance"])) - amount
+                starting_balance = Decimal(str(debit["balance"]))
+                from_balance = starting_balance - amount
                 to_balance = Decimal(str(credit["balance"])) + amount
                 if from_balance < 0 and not command.allow_negative:
-                    raise DomainStateError("Недостаточно средств на счёте отправителя")
+                    if starting_balance < 0:
+                        raise DomainStateError(
+                            "Недостаточно средств: баланс отправителя уже отрицательный "
+                            f"({starting_balance} {command.currency.upper()}). "
+                            f"Дополнительное списание снизит его до {from_balance} {command.currency.upper()}."
+                        )
+                    raise DomainStateError(
+                        "Недостаточно средств на счёте отправителя. "
+                        f"После перевода баланс станет {from_balance} {command.currency.upper()}."
+                    )
 
                 body = {
                     "from_client_id": sender["id"],
@@ -296,13 +306,33 @@ class ClientTransferRepository:
                 else:
                     old_amount = Decimal(str(body["amount"]))
                 delta = new_amount - old_amount
-                from_balance = Decimal(str(debit["balance"])) - (delta if not repeated else 0)
-                to_balance = Decimal(str(credit["balance"])) + (delta if not repeated else 0)
+                starting_from_balance = Decimal(str(debit["balance"]))
+                from_balance = starting_from_balance - (delta if not repeated else 0)
+                starting_to_balance = Decimal(str(credit["balance"]))
+                to_balance = starting_to_balance + (delta if not repeated else 0)
                 if (
-                    not repeated and delta != 0 and not command.allow_negative
-                    and (from_balance < 0 or to_balance < 0)
+                    not repeated and delta > 0 and not command.allow_negative
+                    and from_balance < 0
                 ):
-                    raise DomainStateError("Недостаточно средств для корректировки перевода")
+                    if starting_from_balance < 0:
+                        raise DomainStateError(
+                            "Недостаточно средств: баланс отправителя уже отрицательный "
+                            f"({starting_from_balance} {body['currency']}). "
+                            f"Дополнительное списание снизит его до {from_balance} {body['currency']}."
+                        )
+                    raise DomainStateError(
+                        "Недостаточно средств: увеличение перевода сделает баланс "
+                        f"отправителя отрицательным ({from_balance} {body['currency']})."
+                    )
+                if (
+                    not repeated and delta < 0 and not command.allow_negative
+                    and to_balance < 0
+                ):
+                    raise DomainStateError(
+                        "Недостаточно средств на счёте получателя для возврата перевода: "
+                        f"его баланс изменится с {starting_to_balance} до "
+                        f"{to_balance} {body['currency']}."
+                    )
 
                 if not repeated and delta != 0:
                     adjustment_id = await connection.fetchval(
