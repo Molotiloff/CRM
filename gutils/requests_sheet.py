@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import threading
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -34,12 +35,10 @@ MAIN_RATE_CELL_MAP = {
 }
 _RATE_CODE_ALIASES = {"USD BL": "USD", "USD WH": "USDW"}
 
-# Кеш только для сервисных объектов (не для значений)
-_cached = {
-    "service": None,
-    "spreadsheet_id": None,
-    "creds": None,
-}
+# HTTP-клиент Google не рассчитан на совместное использование несколькими потоками.
+# Кешируем сервис и вложенные ресурсы отдельно в каждом рабочем потоке.
+_thread_cache = threading.local()
+_cached = {"spreadsheet_id": None}
 
 _GOOGLE_API_TIMEOUT_SECONDS = 30.0
 _GOOGLE_API_NUM_RETRIES = 3
@@ -61,8 +60,9 @@ def _extract_id_from_url(maybe_url_or_id: str) -> str:
 
 
 def _get_credentials() -> Any:
-    if _cached["creds"]:
-        return _cached["creds"]
+    creds = getattr(_thread_cache, "creds", None)
+    if creds is not None:
+        return creds
     json_inline = os.getenv("GOOGLE_CREDENTIALS_JSON") or os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
     json_path = (
         os.getenv("GOOGLE_CREDENTIALS_FILE")
@@ -77,13 +77,14 @@ def _get_credentials() -> Any:
         creds = Credentials.from_service_account_file(json_path, scopes=scopes)
     else:
         raise SheetsWriteError("Не заданы креды Google.")
-    _cached["creds"] = creds
+    _thread_cache.creds = creds
     return creds
 
 
 def _get_service():
-    if _cached["service"]:
-        return _cached["service"]
+    service = getattr(_thread_cache, "service", None)
+    if service is not None:
+        return service
     authorized_http = AuthorizedHttp(
         _get_credentials(),
         http=httplib2.Http(timeout=_GOOGLE_API_TIMEOUT_SECONDS),
@@ -94,8 +95,23 @@ def _get_service():
         http=authorized_http,
         cache_discovery=False,
     )
-    _cached["service"] = service
+    _thread_cache.service = service
     return service
+
+
+def _spreadsheets(service):
+    if getattr(_thread_cache, "resource_service", None) is not service:
+        spreadsheets = service.spreadsheets()
+        values = spreadsheets.values()
+        _thread_cache.spreadsheets = spreadsheets
+        _thread_cache.values = values
+        _thread_cache.resource_service = service
+    return _thread_cache.spreadsheets
+
+
+def _values(service):
+    _spreadsheets(service)
+    return _thread_cache.values
 
 
 def _execute(request):
@@ -139,8 +155,7 @@ def _format_dt(value: str | datetime) -> str:
 
 def _find_next_row(service, sid: str, sheet: str) -> int:
     resp = _execute(
-        service.spreadsheets()
-        .values()
+        _values(service)
         .get(
             spreadsheetId=sid,
             range=f"{sheet}!A:A",
@@ -161,8 +176,7 @@ def _read_main_rate_fresh(code: str, cell_map: dict[str, str] | None = None) -> 
     service = _get_service()
     sid = _resolve_spreadsheet_id(None)
     resp = _execute(
-        service.spreadsheets()
-        .values()
+        _values(service)
         .get(
             spreadsheetId=sid,
             range=ref,
@@ -202,8 +216,7 @@ def read_sheet_ranges(
     service = _get_service()
     sid = _resolve_spreadsheet_id(spreadsheet)
     request = (
-        service.spreadsheets()
-        .values()
+        _values(service)
         .batchGet(
             spreadsheetId=sid,
             ranges=ranges,
@@ -270,8 +283,7 @@ def append_sale_row(
         )
 
         _execute(
-            service.spreadsheets()
-            .values()
+            _values(service)
             .batchUpdate(
                 spreadsheetId=sid,
                 body={"valueInputOption": "USER_ENTERED", "data": data},
@@ -322,8 +334,7 @@ def append_buy_row(
         )
 
         _execute(
-            service.spreadsheets()
-            .values()
+            _values(service)
             .batchUpdate(
                 spreadsheetId=sid,
                 body={"valueInputOption": "USER_ENTERED", "data": data},
@@ -344,8 +355,7 @@ def _find_rows_by_req_id(service, sid: str, sheet_name: str, req_id: int | str) 
     """
     rng = f"{sheet_name}!B:B"
     resp = _execute(
-        service.spreadsheets()
-        .values()
+        _values(service)
         .get(
             spreadsheetId=sid,
             range=rng,
@@ -388,7 +398,7 @@ def _delete_rows_by_0based_indices(
             }
         )
     _execute(
-        service.spreadsheets().batchUpdate(
+        _spreadsheets(service).batchUpdate(
             spreadsheetId=sid,
             body={"requests": requests},
         )
@@ -396,7 +406,7 @@ def _delete_rows_by_0based_indices(
 
 
 def _get_sheet_id(service, sid: str, sheet_name: str) -> int:
-    meta = _execute(service.spreadsheets().get(spreadsheetId=sid))
+    meta = _execute(_spreadsheets(service).get(spreadsheetId=sid))
     for sh in meta.get("sheets", []):
         props = sh.get("properties", {})
         if props.get("title") == sheet_name:
