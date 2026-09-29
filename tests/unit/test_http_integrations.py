@@ -15,6 +15,7 @@ from services.aml.models import AMLCheckRequest
 from services.http_policy import HttpRetryPolicy, HttpTimeoutPolicy
 from services.payment_watch.tronscan_gateway import (
     TronscanGateway,
+    TronscanGatewayError,
     TronscanSettings,
 )
 from services.xe_api import ConverterAPIError, ConverterAPIService
@@ -149,7 +150,13 @@ async def test_tronscan_retries_transport_failure() -> None:
 @pytest.mark.parametrize(
     ("tokens", "expected"),
     [
-        ([{"tokenId": "contract", "balance": "123456789", "tokenDecimal": 6}], Decimal("123.456789")),
+        (
+            [
+                {"tokenId": "other", "balance": "999", "tokenDecimal": 6},
+                {"tokenId": "contract", "balance": "6922156134", "tokenDecimal": 6},
+            ],
+            Decimal("6922.156134"),
+        ),
         ([], Decimal("0")),
     ],
 )
@@ -158,7 +165,11 @@ async def test_tronscan_usdt_balance_uses_contract_and_raw_precision(tokens, exp
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests_seen.append(request)
-        return httpx.Response(200, json={"data": tokens}, request=request)
+        return httpx.Response(
+            200,
+            json={"totalTokenCount": len(tokens), "data": tokens},
+            request=request,
+        )
 
     gateway = TronscanGateway(
         settings=TronscanSettings(
@@ -174,10 +185,36 @@ async def test_tronscan_usdt_balance_uses_contract_and_raw_precision(tokens, exp
     finally:
         await gateway.aclose()
 
-    assert requests_seen[0].url.path == "/api/account/tokens"
+    assert requests_seen[0].url.path == "/api/account/token_asset_overview"
     assert requests_seen[0].url.params["address"] == "Taddress"
-    assert requests_seen[0].url.params["token"] == "contract"
     assert requests_seen[0].headers["TRON-PRO-API-KEY"] == "test-key"
+
+
+async def test_tronscan_balance_without_api_key_never_reports_zero() -> None:
+    gateway = TronscanGateway(settings=TronscanSettings())
+
+    with pytest.raises(TronscanGatewayError, match="TRONSCAN_API_KEY"):
+        await gateway.get_usdt_balance(address="Taddress")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"code": 401, "totalTokenCount": 0, "data": []},
+        {"code": 200, "data": []},
+        {"code": 200, "totalTokenCount": 1, "data": []},
+    ],
+)
+async def test_tronscan_unverified_empty_response_never_reports_zero(payload) -> None:
+    gateway = TronscanGateway(settings=TronscanSettings(api_key="test-key"))
+
+    async def fake_get_json(*_args, **_kwargs):
+        return payload
+
+    gateway._get_json = fake_get_json
+
+    with pytest.raises(TronscanGatewayError):
+        await gateway.get_usdt_balance(address="Taddress")
 
 
 def test_getblock_retries_connection_error_but_not_404() -> None:
