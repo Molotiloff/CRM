@@ -32,10 +32,12 @@ async def test_schedule_context_adapter_exposes_only_command_context() -> None:
     clients.snapshot_wallet = AsyncMock(return_value=[{"currency_code": "RUB"}])
     schedule = MagicMock()
     schedule.next_request_id = AsyncMock(return_value=17)
+    schedule.get_cash_request_deal_status = AsyncMock(return_value="done")
     adapter = ClientWalletScheduleContextAdapter(clients, schedule)
 
     assert await adapter.snapshot_wallet(5) == [{"currency_code": "RUB"}]
     assert await adapter.next_request_id() == 17
+    assert await adapter.get_cash_request_deal_status(req_id="Б-1") == "done"
     assert not hasattr(adapter, "deposit")
 
 

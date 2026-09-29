@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from db_asyncpg.repositories.deals import DealRepository
 from services.cash_requests import (
     CreateCashRequest,
@@ -179,6 +181,57 @@ class TestCreateCashCore:
 
 
 class TestEditCashCore:
+    @pytest.mark.parametrize("status", ["done", "canceled"])
+    async def test_terminal_cash_deal_cannot_be_edited_or_reactivated(
+        self, pool, cash_request_repo, request_schedule_repo, client_id, status
+    ) -> None:
+        creator = _create_uc(cash_request_repo, request_schedule_repo, pool=pool, with_crm=True)
+        created = await creator.execute_core(
+            _dep_params(source_message_id=903),
+            messenger=FakeMessenger(),
+            replier=CollectingReplier(),
+        )
+        assert created.ok and created.req_id
+        async with pool.acquire() as connection:
+            await connection.execute(
+                "UPDATE deals SET status = $1 WHERE source_kind = 'cash' AND body->>'req_id' = $2",
+                status,
+                created.req_id,
+            )
+        await request_schedule_repo.deactivate_request_schedule_entry(created.req_id)
+
+        router, schedule = _router_and_schedule(request_schedule_repo)
+        service = EditCashRequest(
+            repo=cash_request_repo,
+            router_service=router,
+            schedule_service=schedule,
+        )
+        params = EditCashRequestParams(
+            chat_id=CLIENT_CHAT,
+            chat_name="Тестовый чат",
+            parsed=_dep_params(parsed={"amount_expr": "2000"}).parsed,
+            old_text=(
+                f"Заявка на внесение: {created.req_id}\nГород: екб\n"
+                "Сумма: 1000 RUB\nКод: 111-222"
+            ),
+            reply_msg_id=701,
+            editor_name="Менеджер",
+        )
+        messenger = FakeMessenger()
+        replier = CollectingReplier()
+
+        prepared = await service.prepare_core(params, replier=CollectingReplier())
+        result = await service.execute_core(params, messenger=messenger, replier=replier)
+
+        assert not prepared.ok and not result.ok
+        assert "Редактировать её нельзя" in result.error
+        assert messenger.sent == [] and messenger.edits == [] and messenger.deletes == []
+        entry = await request_schedule_repo.get_request_schedule_entry_by_req_id(
+            req_id=created.req_id
+        )
+        assert entry is not None and not entry["is_active"]
+        assert await cash_request_repo.get_cash_request_deal_status(req_id=created.req_id) == status
+
     async def test_dep_edits_client_and_request_cards(
         self, cash_request_repo, request_schedule_repo, client_id
     ) -> None:

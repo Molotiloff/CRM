@@ -34,6 +34,8 @@ class CashRequestContextRepositoryPort(Protocol):
         self, *, req_id: str
     ) -> dict[str, Any] | None: ...
 
+    async def get_cash_request_deal_status(self, *, req_id: str) -> str | None: ...
+
 
 class ExchangeCommandRepositoryPort(Protocol):
     async def ensure_client(

@@ -6,6 +6,17 @@ from db_asyncpg.repositories.base import ConnectionBoundRepo
 
 
 class RequestScheduleRepo(ConnectionBoundRepo):
+    async def get_cash_request_deal_status(self, *, req_id: str) -> str | None:
+        async with self._connection() as con:
+            return await con.fetchval(
+                """
+                SELECT status
+                FROM deals
+                WHERE source_kind = 'cash' AND body->>'req_id' = $1
+                """,
+                req_id,
+            )
+
     async def next_request_id(self) -> int:
         async with self._connection() as con:
             async with con.transaction():

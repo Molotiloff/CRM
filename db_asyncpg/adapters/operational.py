@@ -138,6 +138,9 @@ class ClientWalletScheduleContextAdapter:
     async def get_request_schedule_entry_by_req_id(self, *, req_id: str) -> dict[str, Any] | None:
         return await self._schedule.get_request_schedule_entry_by_req_id(req_id=req_id)
 
+    async def get_cash_request_deal_status(self, *, req_id: str) -> str | None:
+        return await self._schedule.get_cash_request_deal_status(req_id=req_id)
+
 
 class ActCounterLedgerRepositoryAdapter(ClientWalletTransactionRepositoryAdapter):
     def __init__(

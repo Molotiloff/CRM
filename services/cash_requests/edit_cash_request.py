@@ -71,6 +71,13 @@ class EditCashRequest(CashRequestUseCaseBase):
             await replier.reply(error)
             return EditCashRequestResult(ok=False, error=error)
 
+        deal_status = await self.repo.get_cash_request_deal_status(req_id=src.req_id)
+        if deal_status in {"done", "canceled"}:
+            state = "проведена" if deal_status == "done" else "отменена"
+            error = f"Заявка {src.req_id} уже {state}. Редактировать её нельзя."
+            await replier.reply(error)
+            return EditCashRequestResult(ok=False, req_id=src.req_id, error=error)
+
         old_entry = await self.repo.get_request_schedule_entry_by_req_id(req_id=src.req_id)
         old_request_chat_id = (
             int(old_entry["request_chat_id"])
