@@ -66,6 +66,36 @@ class TronscanGateway:
             await self._client.aclose()
             self._client = None
 
+    async def get_usdt_balance(self, *, address: str) -> Decimal:
+        data = await self._get_json(
+            "/api/account/tokens",
+            params={
+                "address": address,
+                "start": 0,
+                "limit": 20,
+                "hidden": 1,
+                "show": 1,
+                "token": self.settings.usdt_contract,
+            },
+        )
+        tokens = data.get("data")
+        if not isinstance(tokens, list):
+            raise TronscanGatewayError("Tronscan вернул некорректный список токенов")
+        for token in tokens:
+            if not isinstance(token, dict) or token.get("tokenId") != self.settings.usdt_contract:
+                continue
+            try:
+                raw_balance = Decimal(str(token["balance"]))
+                decimals = int(token["tokenDecimal"])
+                if not raw_balance.is_finite() or raw_balance < 0 or not 0 <= decimals <= 18:
+                    raise ValueError
+                return raw_balance / (Decimal(10) ** decimals)
+            except (KeyError, InvalidOperation, TypeError, ValueError) as exc:
+                raise TronscanGatewayError("Tronscan вернул некорректный остаток USDT") from exc
+        if tokens:
+            raise TronscanGatewayError("Tronscan не вернул токен USDT для указанного контракта")
+        return Decimal(0)
+
     async def list_usdt_transfers(
         self,
         *,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from unittest.mock import Mock
 
 import httpx
@@ -143,6 +144,40 @@ async def test_tronscan_retries_transport_failure() -> None:
         await gateway.aclose()
 
     assert requests_count == 2
+
+
+@pytest.mark.parametrize(
+    ("tokens", "expected"),
+    [
+        ([{"tokenId": "contract", "balance": "123456789", "tokenDecimal": 6}], Decimal("123.456789")),
+        ([], Decimal("0")),
+    ],
+)
+async def test_tronscan_usdt_balance_uses_contract_and_raw_precision(tokens, expected) -> None:
+    requests_seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        return httpx.Response(200, json={"data": tokens}, request=request)
+
+    gateway = TronscanGateway(
+        settings=TronscanSettings(
+            base_url="https://tronscan.test", api_key="test-key", usdt_contract="contract"
+        )
+    )
+    gateway.MIN_REQUEST_INTERVAL_SECONDS = 0
+    gateway._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), timeout=gateway.timeout
+    )
+    try:
+        assert await gateway.get_usdt_balance(address="Taddress") == expected
+    finally:
+        await gateway.aclose()
+
+    assert requests_seen[0].url.path == "/api/account/tokens"
+    assert requests_seen[0].url.params["address"] == "Taddress"
+    assert requests_seen[0].url.params["token"] == "contract"
+    assert requests_seen[0].headers["TRON-PRO-API-KEY"] == "test-key"
 
 
 def test_getblock_retries_connection_error_but_not_404() -> None:

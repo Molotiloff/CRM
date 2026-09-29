@@ -552,6 +552,7 @@ def setup_handlers(
             checker=ThreadedAMLChecker(
                 AMLService(settings=config.getblock),
             ),
+            tron_balance_provider=payment_watch_service.tronscan_gateway,
             metrics=container.metrics,
         )
         aml_handler = AMLHandler(

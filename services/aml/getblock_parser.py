@@ -358,7 +358,9 @@ def _parse_report_preview_soup(
     }
 
 
-def build_report_message(report_data: dict[str, Any]) -> str:
+def build_report_message(
+    report_data: dict[str, Any], *, wallet_balance: str | None = None
+) -> str:
     asset_name = report_data.get("asset_name", "Адрес")
     hash_value = report_data.get("hash", "")
     risk_emoji = report_data.get("risk_emoji", "🟢")
@@ -376,12 +378,16 @@ def build_report_message(report_data: dict[str, Any]) -> str:
     parts = [
         f"{asset_name} {target_label}:",
         f"{hash_value}",
+    ]
+    if wallet_balance is not None:
+        parts.append(f"На балансе кошелька: {wallet_balance}")
+    parts.extend([
         "",
         f"{risk_emoji} {risk_label_ru}: {risk_percent}",
         f"📅 Дата AML проверки: {report_date}",
         f"Контрагент: {counterparty}",
         "",
-    ]
+    ])
 
     if trusted_sources:
         parts.append("✅ Доверенные источники")
