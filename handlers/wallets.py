@@ -17,6 +17,7 @@ from aiogram.types import (
 )
 
 from db_asyncpg.ports.workflows import ManagedClientWalletTransactionRepositoryPort
+from db_asyncpg.repositories.client_closure import ClientClosureError, ClientClosureRepo
 from domain import DomainStateError, DomainValidationError
 from services.accounting.cash_settlement_models import CashSettlementCommand
 from services.accounting.cash_settlement_service import (
@@ -73,6 +74,7 @@ class WalletsHandler:
         city_cash_chats: Mapping[str, int] | None = None,
         cash_settlement_service: CashSettlementService | None = None,
         client_transfer_service: ClientTransferService | None = None,
+        client_closure_repo: ClientClosureRepo | None = None,
         default_city: str = "екб",
     ) -> None:
         self.repo = repo
@@ -84,6 +86,7 @@ class WalletsHandler:
         self.city_cash_chat_ids = set(self.city_cash_chats.values())
         self.cash_settlement_service = cash_settlement_service
         self.client_transfer_service = client_transfer_service
+        self.client_closure_repo = client_closure_repo
         self.receipt_builder = ReceiptImageBuilder()
         self.default_city = default_city
         self._background_tasks: set[asyncio.Task[None]] = set()
@@ -109,6 +112,85 @@ class WalletsHandler:
             parse_mode="HTML",
             reply_markup=result.reply_markup,
         )
+
+    async def _cmd_zero_client(self, message: Message) -> None:
+        if self.client_closure_repo is None:
+            await message.answer("Обнуление временно недоступно")
+            return
+        if not message.from_user or not (
+            message.from_user.id in self.admin_user_ids
+            or await self.repo.is_manager(message.from_user.id)
+        ):
+            await message.answer("⛔ Команда доступна только менеджерам")
+            return
+        if (message.chat.type not in {"group", "supergroup"}
+                or message.chat.id in self.city_cash_chat_ids | self.silent_chat_ids
+                | self.admin_chat_ids | self.ignore_chat_ids):
+            await message.answer("/обнулить доступна только в чате клиента")
+            return
+        if len((message.text or "").strip().split()) != 1:
+            await message.answer("Использование: /обнулить")
+            return
+        try:
+            preview = await self.client_closure_repo.preview(message.chat.id)
+        except ClientClosureError as exc:
+            await message.answer(str(exc))
+            return
+        lines = [
+            f"⚠️ Обнулить клиента «{preview.client_name}» (чат {preview.chat_id})?",
+            "Будут созданы корректирующие проводки, клиент и все его счета станут неактивными.",
+            "Текущие остатки:",
+        ]
+        lines.extend(f"{a.currency}: {a.balance}" for a in preview.accounts)
+        if not preview.accounts:
+            lines.append("Счетов нет")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="Подтвердить обнуление",
+                callback_data=f"zero:yes:{message.from_user.id}:{preview.fingerprint}",
+            ),
+            InlineKeyboardButton(
+                text="Отклонить",
+                callback_data=f"zero:no:{message.from_user.id}:{preview.fingerprint}",
+            ),
+        ]])
+        await message.answer("\n".join(lines), reply_markup=keyboard)
+
+    async def _cb_zero_client(self, cq: CallbackQuery) -> None:
+        if not isinstance(cq.message, Message) or self.client_closure_repo is None:
+            await cq.answer("Сообщение недоступно", show_alert=True)
+            return
+        try:
+            _, decision, initiator, fingerprint = (cq.data or "").split(":")
+            if decision not in {"yes", "no"} or int(initiator) != cq.from_user.id:
+                raise ValueError
+        except ValueError:
+            await cq.answer("Подтвердить может только менеджер, создавший запрос", show_alert=True)
+            return
+        if not (cq.from_user.id in self.admin_user_ids
+                or await self.repo.is_manager(cq.from_user.id)):
+            await cq.answer("Доступ только для менеджеров", show_alert=True)
+            return
+        if decision == "no":
+            await cq.message.edit_text("Обнуление отклонено")
+            await cq.answer()
+            return
+        async with self.chat_locks.for_chat(cq.message.chat.id):
+            try:
+                preview = await self.client_closure_repo.close(
+                    chat_id=cq.message.chat.id,
+                    expected_fingerprint=fingerprint,
+                    actor_tg_user_id=cq.from_user.id,
+                    confirmation_message_id=cq.message.message_id,
+                )
+            except ClientClosureError as exc:
+                await cq.answer(str(exc), show_alert=True)
+                return
+        await cq.message.edit_text(
+            f"✅ Клиент «{preview.client_name}» обнулён. "
+            "Все счета и клиент неактивны. Корректирующие проводки сохранены."
+        )
+        await cq.answer("Обнулено")
 
     @manager_or_admin_message_required
     async def _cmd_rmcur(self, message: Message) -> None:
@@ -830,6 +912,7 @@ class WalletsHandler:
         await handle_stmt_callback(cq, self.repo)
 
     def _register(self) -> None:
+        self.router.message.register(self._cmd_zero_client, Command("обнулить"))
         self.router.message.register(self._cmd_wallet, Command("кошелек"))
         self.router.message.register(self._cmd_addcur, Command("добавь"))
         self.router.message.register(self._cmd_rmcur, Command("удали"))
@@ -850,6 +933,7 @@ class WalletsHandler:
         )
 
         self.router.callback_query.register(self._cb_rmcur, F.data.startswith("rmcur:"))
+        self.router.callback_query.register(self._cb_zero_client, F.data.startswith("zero:"))
         self.router.callback_query.register(self._cb_undo, F.data.startswith("undo:"))
         self.router.callback_query.register(self._cb_statement, F.data.in_({"stmt:month", "stmt:all"}))
         self.router.callback_query.register(self._cb_client_transfer, F.data.startswith("ct:"))

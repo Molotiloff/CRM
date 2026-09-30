@@ -6,6 +6,7 @@ from app.container import ApplicationContainer
 from app.lifecycle import SchedulerLifecycleAdapter
 from app.office_cards import OFFICE_CARDS
 from app.runtime import BotRuntimeServices
+from db_asyncpg.repositories.client_closure import ClientClosureRepo
 from handlers import (
     AcceptShortHandler,
     ActHandler,
@@ -378,6 +379,7 @@ def setup_handlers(
         city_cash_chats=city_cash_chats,
         cash_settlement_service=container.accounting.cash_settlements,
         client_transfer_service=container.crm.client_transfers,
+        client_closure_repo=ClientClosureRepo(container.pool),
         default_city=config.default_city,
     )
     if silent_accounting_chat_ids:

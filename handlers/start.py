@@ -4,6 +4,7 @@ from aiogram import Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, LinkPreviewOptions, Message, ReplyKeyboardRemove
 
+from db_asyncpg.repositories.clients import ClientClosedError
 from keyboards import MainKeyboard
 from services.admin_client import ClientBootstrapService
 from telegram_adapters.message_context import get_chat_name
@@ -78,7 +79,11 @@ class StartHandler:
         # регистрируем/обновляем клиента (чат) в БД
         chat_id = message.chat.id
         chat_name = get_chat_name(message)
-        await self.bootstrap_service.ensure_client_wallet(chat_id=chat_id, chat_name=chat_name)
+        try:
+            await self.bootstrap_service.ensure_client_wallet(chat_id=chat_id, chat_name=chat_name)
+        except ClientClosedError:
+            await message.answer("Этот клиентский чат обнулён и закрыт. Обратитесь к менеджеру.")
+            return
         if chat_id in self.silent_chat_ids:
             if self.on_silent_wallet_ready is not None:
                 await self.on_silent_wallet_ready()
@@ -162,11 +167,11 @@ class StartHandler:
             "📊 Отчёты:\n"
             "• <code>/бк</code> — балансы клиентов (ненулевые)\n"
             "• <code>/бк &lt;ВАЛЮТА&gt; &lt;+|-&gt;</code> — фильтр\n\n"
-            "👥 Клиенты и города:\n"
-            "• <code>/клиенты</code> — список\n"
-            "• <code>/город &lt;chat_id&gt; &lt;город&gt;</code> — присвоить город (админы)\n\n"
+            "👥 Клиенты:\n"
+            "• <code>/клиенты</code> — список\n\n"
             "🔐 Роли и доступ:\n"
             "• <code>/mgr &lt;user_id&gt;</code> — добавить менеджера (user_id см. <code>/whoami</code>)\n\n"
+            "• <code>/обнулить</code> — обнулить и закрыть клиента в его чате (с подтверждением)\n\n"
             "💼 Кошелёк USDT:\n"
             "• <code>/кош</code> — адрес USDT (TRC20)\n\n"
             "🖼 Прочее:\n"

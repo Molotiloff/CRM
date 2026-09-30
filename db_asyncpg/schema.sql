@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS clients (
     client_group TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    deactivated_at TIMESTAMPTZ
+    deactivated_at TIMESTAMPTZ,
+    closed_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_clients_active ON clients(is_active);
 

@@ -6,6 +6,10 @@ from db_asyncpg.repositories.base import ConnectionBoundRepo
 from db_asyncpg.utils import to_upper
 
 
+class ClientClosedError(ValueError):
+    """An explicitly zeroed client must not be reopened implicitly."""
+
+
 class ClientsRepo(ConnectionBoundRepo):
     async def update_client_chat_id(self, *, client_id: int, new_chat_id: int) -> None:
         async with self._connection() as con:
@@ -41,10 +45,12 @@ class ClientsRepo(ConnectionBoundRepo):
         async with self._connection() as con:
             async with con.transaction():
                 row = await con.fetchrow(
-                    "SELECT id, name, client_group, is_active FROM clients WHERE chat_id=$1",
+                    "SELECT id, name, client_group, is_active, closed_at FROM clients WHERE chat_id=$1 FOR UPDATE",
                     int(chat_id),
                 )
                 if row:
+                    if row["closed_at"] is not None:
+                        raise ClientClosedError("Клиент обнулён и закрыт. Для повторного открытия требуется отдельное решение.")
                     need_update_ng = (
                         (name and row["name"] != name)
                         or (client_group is not None and row["client_group"] != client_group)
@@ -170,6 +176,11 @@ class ClientsRepo(ConnectionBoundRepo):
         code = to_upper(currency_code)
         async with self._connection() as con:
             async with con.transaction():
+                client = await con.fetchrow(
+                    "SELECT is_active, closed_at FROM clients WHERE id=$1 FOR UPDATE", client_id
+                )
+                if client is None or client["closed_at"] is not None:
+                    raise ClientClosedError("Клиент обнулён и закрыт; открыть счёт нельзя")
                 rec = await con.fetchrow(
                     """
                     INSERT INTO client_accounts(client_id, currency_code, precision)
