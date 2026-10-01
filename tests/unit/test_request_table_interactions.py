@@ -54,6 +54,24 @@ class DoneServiceStub:
         return None
 
     @staticmethod
+    async def write_exchange_request_once(
+        *, table_req_id: str, repo: ExchangeRequestRepoStub,
+        deal_service: object, message_dt: datetime | None,
+    ) -> TableDoneResult:
+        assert table_req_id == "10"
+        await repo.mark_exchange_request_table_done(
+            table_req_id=table_req_id, is_table_done=True
+        )
+        return TableDoneResult(
+            sheet_type="Продажа",
+            in_cur="RUB",
+            out_cur="USDT",
+            in_amt=Decimal("8000"),
+            out_amt=Decimal("100"),
+            rate=Decimal("80"),
+        )
+
+    @staticmethod
     async def write_by_payload(
         *,
         payload: TableDonePayload,

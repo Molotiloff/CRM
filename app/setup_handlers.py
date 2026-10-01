@@ -586,6 +586,7 @@ def setup_handlers(
                     message_builder=message_builder,
                     sheets_gateway=sheets_gateway,
                     keyboards=request_table_keyboards,
+                    deal_service=container.crm.deals,
                 )
             )
         )

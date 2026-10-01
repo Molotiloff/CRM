@@ -23,6 +23,12 @@ class ExchangeDealData:
     pay_amount: Decimal
     rate: Decimal
     comment: str | None = None
+    source: str = "tg_bot"
+    actor_user_id: int | None = None
+    tronscan_url: str | None = None
+    city: str | None = None
+    referrer_client_id: int | None = None
+    referrer_percent: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,14 +74,15 @@ class TelegramDealRegistrar:
     def build_exchange_command(self, data: ExchangeDealData) -> DealCreateCommand:
         return DealCreateCommand(
             deal_type=self._exchange_type(data.recv_code, data.pay_code),
-            city=self._default_city,
-            actor_user_id=None,
+            city=data.city or self._default_city,
+            actor_user_id=data.actor_user_id,
             client_id=data.client_id,
-            source="tg_bot",
+            source=data.source,
             source_kind="exchange",
             source_ref=data.source_ref,
             exchange_client_req_id=data.client_req_id,
             comment=data.comment,
+            tronscan_url=data.tronscan_url,
             body={
                 "client_name": data.client_name,
                 "creator_name": data.creator_name,
@@ -87,6 +94,8 @@ class TelegramDealRegistrar:
                 "pay_amount": str(data.pay_amount),
                 "rate": str(data.rate),
                 "note": data.comment,
+                "referrer_client_id": data.referrer_client_id,
+                "referrer_percent": str(data.referrer_percent),
             },
         )
 

@@ -63,9 +63,32 @@ class ClientTransferCreateRequest(BaseModel):
     allowNegative: bool = False
 
 
+class ExchangeDealCreateRequest(BaseModel):
+    dealType: DealType
+    clientId: int = Field(gt=0)
+    city: str = Field(min_length=1, max_length=64)
+    recvCode: str = Field(min_length=1, max_length=12)
+    recvAmount: Decimal = Field(gt=0)
+    payCode: str = Field(min_length=1, max_length=12)
+    payAmount: Decimal = Field(gt=0)
+    idempotencyKey: str = Field(min_length=1, max_length=120)
+    comment: str | None = None
+    referrerClientId: int | None = Field(default=None, gt=0)
+    referrerPercent: Decimal = Field(default=Decimal("0"), ge=0, le=100)
+
+    @model_validator(mode="after")
+    def validate_exchange(self) -> ExchangeDealCreateRequest:
+        if self.dealType not in {DealType.sale, DealType.purchase}:
+            raise ValueError("Only purchase and sale are supported")
+        if not self.recvAmount.is_finite() or not self.payAmount.is_finite():
+            raise ValueError("Amounts must be finite")
+        return self
+
+
 class DealFormClientDto(BaseModel):
     id: str
     name: str
+    chatId: str | None = None
 
 
 class DealFormContextDto(BaseModel):
@@ -237,6 +260,7 @@ class DealDetailsResponse(BaseModel):
     dealAt: str | None = None
     source: str
     sourceKind: str | None = None
+    requestChatPosted: bool | None = None
     counterpartyName: str | None = None
     counterpartyPercent: float | None = None
     profitRub: float

@@ -28,6 +28,7 @@ _SPREADSHEET_ID_RE = re.compile(r"/spreadsheets/d/([a-zA-Z0-9-_]+)")
 # Карта ячеек с внутренними курсами на листе «Главная»
 MAIN_RATE_CELL_MAP = {
     "EUR": "Главная!E2",
+    "EUR500": "Главная!E2",
     "USDT": "Главная!E9",
     "USD": "Главная!H9",
     "USDW": "Главная!H2",

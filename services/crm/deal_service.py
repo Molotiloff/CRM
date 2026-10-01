@@ -213,6 +213,14 @@ class DealStatusPolicyPort(Protocol):
 
 
 class DealRepositoryPort(Protocol):
+    async def get_by_source_ref(self, source_ref: str) -> Deal | None: ...
+
+    async def get_by_table_req_id(self, table_req_id: str) -> Deal | None: ...
+
+    async def complete_exchange_after_table(
+        self, table_req_id: str, *, actor_user_id: int | None
+    ) -> Deal | None: ...
+
     async def list_deals(self, filters: DealListFilter) -> list[Deal]: ...
 
     async def get_deal(self, deal_id: int) -> Deal | None: ...
@@ -254,6 +262,25 @@ class DealService:
         deal = await self._repository.get_deal(deal_id)
         if deal is None:
             raise DealNotFoundError(f"Deal {deal_id} was not found")
+        return deal
+
+    async def get_source_exchange(self, source_ref: str) -> Deal | None:
+        return await self._repository.get_by_source_ref(source_ref)
+
+    async def get_exchange_by_table_req_id(self, table_req_id: str) -> Deal | None:
+        return await self._repository.get_by_table_req_id(table_req_id)
+
+    async def complete_exchange_after_table(
+        self, table_req_id: str, *, actor_user_id: int | None = None
+    ) -> Deal | None:
+        old = await self._repository.get_by_table_req_id(table_req_id)
+        if old is None:
+            return None
+        deal = await self._repository.complete_exchange_after_table(
+            table_req_id, actor_user_id=actor_user_id
+        )
+        if deal is not None and old.status is not DealStatus.DONE:
+            await self._publish("deal.status_changed", deal, {"status": "done"})
         return deal
 
     @logged_operation("deal.create")

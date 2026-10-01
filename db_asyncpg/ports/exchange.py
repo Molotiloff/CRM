@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
 from typing import Any, Protocol
 
 
 class ExchangeRequestRepositoryPort(Protocol):
+    def table_write_lock(self, table_req_id: str) -> AbstractAsyncContextManager[None]: ...
+
     async def upsert_exchange_request_link(
         self,
         *,

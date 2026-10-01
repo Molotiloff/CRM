@@ -4,9 +4,14 @@ import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from typing import TYPE_CHECKING
 
 from gutils.requests_sheet import MAIN_RATE_CELL_MAP, SheetsWriteError
 from services.request_table.sheets_trade_gateway import AsyncSheetsTradeGateway
+
+if TYPE_CHECKING:
+    from db_asyncpg.ports.exchange import ExchangeRequestRepositoryPort
+    from services.crm.deal_service import DealService
 
 
 @dataclass(slots=True, frozen=True)
@@ -30,8 +35,9 @@ class TableDoneResult:
 
 
 class RequestTableDoneService:
+    _global_write_lock = asyncio.Lock()
     _RUB_CODES = {"RUB", "РУБМСК", "РУБСПБ", "РУБПЕР", "РУБТЮМ"}
-    _FIAT_CODES = frozenset({"EUR", "USD", "USDW", "THB"})
+    _FIAT_CODES = frozenset({"EUR", "EUR500", "USD", "USDW", "THB"})
 
     _TABLE_CURRENCY_NAMES = {
         "USD": "USD BL",
@@ -45,7 +51,7 @@ class RequestTableDoneService:
 
     def __init__(self, *, sheets_gateway: AsyncSheetsTradeGateway) -> None:
         self.sheets_gateway = sheets_gateway
-        self._write_lock = asyncio.Lock()
+        self._write_lock = self._global_write_lock
 
     @classmethod
     def _to_decimal(cls, raw: str) -> Decimal:
@@ -128,6 +134,51 @@ class RequestTableDoneService:
                 message_dt=message_dt,
             )
 
+    async def write_exchange_request_once(
+        self,
+        *,
+        table_req_id: str,
+        repo: ExchangeRequestRepositoryPort,
+        deal_service: DealService | None,
+        message_dt: datetime | None,
+        actor_user_id: int | None = None,
+    ) -> TableDoneResult | None:
+        async with self._write_lock:
+            async with repo.table_write_lock(table_req_id):
+                row = await repo.get_exchange_request_link_by_table_req_id(
+                    table_req_id=table_req_id
+                )
+                if row is None:
+                    raise SheetsWriteError("Заявка для записи в таблицу не найдена")
+                if row.get("status") == "cancelled":
+                    raise SheetsWriteError("Отменённую заявку нельзя занести в таблицу")
+                if row.get("is_table_done"):
+                    if deal_service is not None:
+                        await deal_service.complete_exchange_after_table(
+                            table_req_id, actor_user_id=actor_user_id
+                        )
+                    return None
+                payload = self.payload_from_db_row(row)
+                if payload is None:
+                    raise SheetsWriteError("Параметры заявки для таблицы повреждены")
+                result = await self._write_by_payload(payload=payload, message_dt=message_dt)
+                marked = await repo.mark_exchange_request_table_done(
+                    table_req_id=table_req_id, is_table_done=True
+                )
+                if not marked:
+                    raise SheetsWriteError("Запись создана, но отметка в БД не сохранена: нужна сверка")
+                if deal_service is not None:
+                    try:
+                        await deal_service.complete_exchange_after_table(
+                            table_req_id, actor_user_id=actor_user_id
+                        )
+                    except Exception as exc:
+                        raise SheetsWriteError(
+                            "Запись в таблице выполнена, но статус CRM не обновился. "
+                            "Повторите кнопку: строка повторно не добавится"
+                        ) from exc
+                return result
+
     async def _write_by_payload(
         self,
         *,
@@ -143,6 +194,9 @@ class RequestTableDoneService:
         rate = payload.rate
         in_cur_table = self._map_table_currency(in_cur)
         out_cur_table = self._map_table_currency(out_cur)
+
+        if "EUR500" in {in_cur, out_cur} and "RUB" not in {in_cur_table, out_cur_table}:
+            raise SheetsWriteError("EUR500 пока поддерживается в таблице только в паре с RUB")
 
         if in_cur == "USDT" and out_cur not in self._FIAT_CODES:
             await self.sheets_gateway.append_buy_row(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import random
 from dataclasses import dataclass
+from decimal import Decimal
 
 from domain import TelegramMessageRef
 from observability import bind_log_context, logged_operation, measured_operation
@@ -36,6 +37,12 @@ class CreateExchangeParams:
     pay_is_withdraw: bool = True
     note: str | None = None
     reply_to_message_id: int | None = None  # None — карточка клиента без reply
+    source: str = "tg_bot"
+    actor_user_id: int | None = None
+    tronscan_url: str | None = None
+    city: str | None = None
+    referrer_client_id: int | None = None
+    referrer_percent: Decimal = Decimal("0")
 
 
 @dataclass(slots=True, frozen=True)
@@ -44,6 +51,7 @@ class CreateExchangeResult:
     req_id: str | None = None
     table_req_id: int | None = None
     error: str | None = None
+    request_chat_posted: bool = False
 
 
 class CreateExchangeRequest(_ExchangeUseCaseBase):
@@ -129,6 +137,12 @@ class CreateExchangeRequest(_ExchangeUseCaseBase):
                 pay_amount=pay_amount,
                 rate=rate,
                 comment=params.note,
+                source=params.source,
+                actor_user_id=params.actor_user_id,
+                tronscan_url=params.tronscan_url,
+                city=params.city,
+                referrer_client_id=params.referrer_client_id,
+                referrer_percent=params.referrer_percent,
             )
 
             try:
@@ -228,6 +242,7 @@ class CreateExchangeRequest(_ExchangeUseCaseBase):
                             "Failed to update ACT for in-request-chat exchange request %s", req_id
                         )
 
+            request_chat_posted = is_request_chat_origin
             if self.request_chat_id and not is_request_chat_origin:
                 try:
                     sent_request = await messenger.send(
@@ -248,6 +263,7 @@ class CreateExchangeRequest(_ExchangeUseCaseBase):
                         message=TelegramMessageRef(sent_request.chat_id, sent_request.message_id),
                         request_text=texts.request_text,
                     )
+                    request_chat_posted = True
                     if self.act_counter_service:
                         await self.act_counter_service.register_exchange_movements(
                             req_id=str(req_id),
@@ -279,7 +295,10 @@ class CreateExchangeRequest(_ExchangeUseCaseBase):
                     parse_mode="HTML",
                 )
 
-            return CreateExchangeResult(ok=True, req_id=str(req_id), table_req_id=int(table_req_id))
+            return CreateExchangeResult(
+                ok=True, req_id=str(req_id), table_req_id=int(table_req_id),
+                request_chat_posted=request_chat_posted,
+            )
 
         except Exception as e:
             log.exception("Exchange request creation failed")

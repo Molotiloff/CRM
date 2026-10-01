@@ -82,6 +82,23 @@ async def test_exchange_request_repository_preserves_partial_upsert_contract(poo
     assert by_client_id["status"] == "cancelled"
 
 
+async def test_exchange_table_lock_serializes_other_connections(pool) -> None:
+    repository = ExchangeRequestsRepo(pool)
+    key = "skyex:exchange_table:lock-test"
+    async with repository.table_write_lock("lock-test"):
+        async with pool.acquire() as con:
+            acquired = await con.fetchval(
+                "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", key
+            )
+            assert acquired is False
+    async with pool.acquire() as con:
+        acquired = await con.fetchval(
+            "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", key
+        )
+        assert acquired is True
+        await con.execute("SELECT pg_advisory_unlock(hashtextextended($1, 0))", key)
+
+
 async def test_request_schedule_repository_normalizes_and_deactivates_contract(pool) -> None:
     repository = RequestScheduleRepo(pool)
     await repository.upsert_request_schedule_entry(

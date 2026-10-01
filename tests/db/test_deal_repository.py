@@ -4,7 +4,10 @@ from decimal import Decimal
 
 import pytest
 
+from api.presentation.deals import build_deal_details
 from db_asyncpg.repositories.deals import DealRepository
+from db_asyncpg.repositories.exchange_requests import ExchangeRequestsRepo
+from domain import DomainStateError
 from services.crm.deal_service import (
     DealCreateCommand,
     DealListFilter,
@@ -109,3 +112,64 @@ async def test_deal_repository_idempotently_links_source_request(pool, client_id
     assert '"newStatus": "fixed"' in outbox_rows[0]["payload"]
     assert outbox_rows[1]["kind"] == "deal_source_updated"
     assert '"status": "fixed"' in outbox_rows[1]["payload"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deal_type", "recv_code", "recv_amount", "pay_code", "pay_amount", "direction", "source"),
+    [
+        ("sale", "RUB", "1000", "USD", "12.5", "RUB → USD", "crm"),
+        ("purchase", "USD", "12.5", "RUB", "1000", "USD → RUB", "tg_bot"),
+    ],
+)
+async def test_exchange_table_completion_preserves_currency_direction(
+    pool, client_id, deal_type, recv_code, recv_amount, pay_code, pay_amount, direction, source
+) -> None:
+    deal_repo = DealRepository(pool)
+    request_repo = ExchangeRequestsRepo(pool)
+    request_id = "12345678" if deal_type == "sale" else "12345679"
+    table_id = "45678" if deal_type == "sale" else "45679"
+    await request_repo.upsert_exchange_request_link(
+        client_req_id=request_id,
+        table_req_id=table_id,
+        table_in_cur=recv_code,
+        table_out_cur=pay_code,
+        table_in_amount=Decimal(recv_amount),
+        table_out_amount=Decimal(pay_amount),
+        table_rate=Decimal("80"),
+        status="active",
+    )
+    deal = await deal_repo.create_deal(DealCreateCommand(
+        deal_type=deal_type,
+        city="екб",
+        actor_user_id=None,
+        client_id=client_id,
+        source=source,
+        source_kind="exchange",
+        source_ref=f"crm:{request_id}",
+        exchange_client_req_id=request_id,
+        body={
+            "recv_code": recv_code, "recv_amount": recv_amount,
+            "pay_code": pay_code, "pay_amount": pay_amount,
+        },
+    ))
+    details = build_deal_details(deal)
+    assert details.deal.direction == direction
+    assert details.deal.asset == "USD"
+    assert details.deal.amountRub == 1000.0
+    assert details.deal.status == "new"
+    if source == "crm":
+        assert await deal_repo.get_by_source_ref(f"crm:{request_id}") is not None
+    with pytest.raises(DomainStateError, match="не занесена"):
+        await deal_repo.complete_exchange_after_table(table_id, actor_user_id=None)
+    await request_repo.mark_exchange_request_table_done(table_req_id=table_id)
+    done = await deal_repo.complete_exchange_after_table(table_id, actor_user_id=None)
+    assert done is not None and done.status == "done"
+    repeated = await deal_repo.complete_exchange_after_table(table_id, actor_user_id=None)
+    assert repeated is not None and repeated.status == "done"
+    assert [event.new_status for event in repeated.status_events] == ["new", "done"]
+    async with pool.acquire() as con:
+        outbox_count = await con.fetchval(
+            "SELECT COUNT(*) FROM tg_outbox WHERE kind='deal_status_changed'"
+        )
+    assert outbox_count == 1

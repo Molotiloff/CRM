@@ -132,6 +132,10 @@ def _deal_type_label(deal_type: str) -> str:
 
 
 def _deal_asset(deal_type: str, body: Mapping[str, Any]) -> str:
+    if deal_type in {"sale", "purchase"}:
+        non_rub = _exchange_foreign_currency(body)
+        if non_rub:
+            return non_rub
     if deal_type == "best_change":
         return "USDT"
     for key in ("currency", "asset", "from_currency", "fromCurrency"):
@@ -142,6 +146,11 @@ def _deal_asset(deal_type: str, body: Mapping[str, Any]) -> str:
 
 
 def _deal_amount_rub(deal_type: str, body: Mapping[str, Any]) -> float:
+    if deal_type in {"sale", "purchase"}:
+        for prefix in ("recv", "pay"):
+            if _is_rub(body.get(f"{prefix}_code")):
+                amount = _body_decimal(body, f"{prefix}_amount")
+                return float_value(amount) if amount is not None else 0.0
     if deal_type == "client_transfer":
         return 0.0
     if deal_type == "best_change":
@@ -168,6 +177,11 @@ def _deal_amount_rub(deal_type: str, body: Mapping[str, Any]) -> float:
 
 
 def _deal_direction(deal_type: str, body: Mapping[str, Any]) -> str:
+    if deal_type in {"sale", "purchase"}:
+        received = str(body.get("recv_code") or "").upper()
+        paid = str(body.get("pay_code") or "").upper()
+        if received and paid:
+            return f"{received} → {paid}"
     if deal_type == "client_transfer":
         return f"{body.get('from_client_name', '—')} → {body.get('to_client_name', '—')}"
     if deal_type == "best_change":
@@ -176,6 +190,18 @@ def _deal_direction(deal_type: str, body: Mapping[str, Any]) -> str:
             "sale": "USDT → RUB",
         }.get(str(body.get("operation_kind")), "—")
     return f"{_deal_asset(deal_type, body)} → RUB"
+
+
+def _is_rub(code: object) -> bool:
+    return str(code or "").upper() in {"RUB", "РУБМСК", "РУБСПБ", "РУБПЕР", "РУБТЮМ"}
+
+
+def _exchange_foreign_currency(body: Mapping[str, Any]) -> str | None:
+    for key in ("recv_code", "pay_code"):
+        code = str(body.get(key) or "").upper()
+        if code and not _is_rub(code):
+            return code
+    return None
 
 
 def _best_change_details(row: Deal) -> BestChangeDetailsDto | None:

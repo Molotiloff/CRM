@@ -1,11 +1,25 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from db_asyncpg.repositories.base import ConnectionBoundRepo
 
 
 class ExchangeRequestsRepo(ConnectionBoundRepo):
+    @asynccontextmanager
+    async def table_write_lock(self, table_req_id: str) -> AsyncIterator[None]:
+        # Session lock spans the external Sheets write and the DB completion flag.
+        # It serializes bot and API processes, which do not share an asyncio lock.
+        async with self._pool.acquire() as con:
+            key = f"skyex:exchange_table:{table_req_id}"
+            await con.execute("SELECT pg_advisory_lock(hashtextextended($1, 0))", key)
+            try:
+                yield
+            finally:
+                await con.execute("SELECT pg_advisory_unlock(hashtextextended($1, 0))", key)
+
     async def upsert_exchange_request_link(
         self,
         *,

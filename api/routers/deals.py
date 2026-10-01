@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 from datetime import date
 from typing import Any
 
@@ -21,10 +23,11 @@ from api.schemas.deals import (
     DealStatusRequest,
     DealType,
     DealUpdateRequest,
+    ExchangeDealCreateRequest,
     SettlementResolutionResponse,
     SettlementReviewResolutionRequest,
 )
-from domain import DomainValidationError
+from domain import DomainStateError, DomainValidationError
 from domain.accounting_flows import SettlementResolution as DomainSettlementResolution
 from services.crm.client_transfer_service import ClientTransferCommand, ClientTransferService
 from services.crm.deal_service import (
@@ -39,13 +42,19 @@ from services.crm.deal_source_mutation import (
     DealSourceMutationService,
     ExchangeSourceEdit,
 )
+from services.crm.telegram_deal_registrar import exchange_type_from_firm_perspective
+from services.exchange.create_exchange_request import CreateExchangeParams, CreateExchangeRequest
+from services.messaging import CollectingReplier, DeferredMessenger
 from services.payment_watch.settlement_models import (
     ReplacementExchange,
     ResolveSettlementCommand,
 )
 from services.payment_watch.settlement_service import DealSettlementService
+from services.request_table.table_done_service import RequestTableDoneService
+from telegram_adapters import AiogramExchangeKeyboardPresenter
 
 router = APIRouter(prefix="/api/v1", tags=["deals"])
+_exchange_creation_lock = asyncio.Lock()
 
 
 def get_deal_service(request: Request) -> DealService:
@@ -77,7 +86,10 @@ async def get_deal_form_context(
     return DealFormContextDto.model_validate({
         "cities": ["Екб", "Члб", "Тюмень", "Мск"],
         "counterparties": [],
-        "clients": [{"id": str(row["id"]), "name": row["name"]} for row in clients],
+        "clients": [
+            {"id": str(row["id"]), "name": row["name"], "chatId": str(row["chat_id"])}
+            for row in clients
+        ],
         "companyRates": {},
         "defaultCounterpartyPercent": 0,
     })
@@ -197,6 +209,110 @@ async def create_client_transfer(
     return build_deal_details(await deal_service.get_deal(result.deal_id))
 
 
+@router.post(
+    "/deals/exchanges",
+    response_model=DealDetailsResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=error_responses(
+        status.HTTP_400_BAD_REQUEST, status.HTTP_401_UNAUTHORIZED,
+        status.HTTP_403_FORBIDDEN, status.HTTP_409_CONFLICT,
+    ),
+)
+async def create_exchange_deal(
+    payload: ExchangeDealCreateRequest,
+    request: Request,
+    user: ApiUser = Depends(require_role(UserRole.manager)),
+    service: DealService = Depends(get_deal_service),
+) -> DealDetailsResponse:
+    received, paid = payload.recvCode.strip().upper(), payload.payCode.strip().upper()
+    allowed = {"RUB", "USDT", "USD", "USDW", "EUR", "EUR500", "THB"}
+    if received not in allowed or paid not in allowed or received == paid:
+        raise DomainValidationError("Неверная пара валют")
+    if exchange_type_from_firm_perspective(received, paid) != payload.dealType.value:
+        raise DomainValidationError("Направление валют не соответствует типу сделки")
+    container = request.app.state.container
+    if not container.config.request_chat_id or isinstance(container.messenger, DeferredMessenger):
+        raise DomainStateError("Отправка в заявочный чат сейчас недоступна")
+    async with container.pool.acquire() as con:
+        client = await con.fetchrow(
+            "SELECT chat_id, name FROM clients WHERE id=$1 AND is_active=TRUE",
+            payload.clientId,
+        )
+    if client is None:
+        raise DomainValidationError("Активный клиент не найден")
+    if payload.referrerPercent > 0 and payload.referrerClientId is None:
+        raise DomainValidationError("Для процента КТ выберите чат клиента-КТ")
+    if payload.referrerClientId is not None:
+        if payload.referrerClientId == payload.clientId:
+            raise DomainValidationError("Клиент и КТ должны быть разными чатами")
+        async with container.pool.acquire() as con:
+            referrer_exists = await con.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM clients WHERE id=$1 AND is_active=TRUE)",
+                payload.referrerClientId,
+            )
+        if not referrer_exists:
+            raise DomainValidationError("Активный чат КТ не найден")
+    chat_id = int(client["chat_id"])
+    source_message_id = int.from_bytes(
+        hashlib.blake2b(payload.idempotencyKey.encode(), digest_size=8).digest(), "big"
+    ) & ((1 << 63) - 1)
+    source_ref = f"{chat_id}:{source_message_id}"
+    async with _exchange_creation_lock:
+        existing = await service.get_source_exchange(source_ref)
+        if existing is not None:
+            response = build_deal_details(await service.get_deal(existing.id))
+            link = await container.operational_repositories.exchange_requests.get_exchange_request_link(
+                client_req_id=existing.exchange_client_req_id
+            ) if existing.exchange_client_req_id else None
+            response.requestChatPosted = bool(link and link.get("request_message_id"))
+            return response
+        exchange = container.exchange
+        use_case = CreateExchangeRequest(
+            repo=container.operational_repositories.exchange_commands,
+            request_chat_id=container.config.request_chat_id,
+            balance_service=exchange.balance,
+            calculator=exchange.calculator,
+            text_builder=exchange.text_builder,
+            unit_of_work_factory=exchange.unit_of_work_factory,
+            keyboards=AiogramExchangeKeyboardPresenter(),
+            act_counter_service=exchange.act_counter,
+            deal_registrar=container.crm.telegram_registrar,
+            transaction_service=exchange.transaction,
+            source_links=exchange.source_links,
+            notification_builder=exchange.notifications,
+            wallet_presenter=exchange.wallet_presenter,
+            metrics=container.metrics,
+        )
+        result = await use_case.execute_core(
+            CreateExchangeParams(
+                chat_id=chat_id,
+                chat_name=str(client["name"]),
+                source_message_id=source_message_id,
+                recv_code=received,
+                recv_amount_expr=str(payload.recvAmount),
+                pay_code=paid,
+                pay_amount_expr=str(payload.payAmount),
+                creator_name=user.display_name,
+                note=payload.comment,
+                source="crm",
+                actor_user_id=user.id,
+                city=payload.city,
+                referrer_client_id=payload.referrerClientId,
+                referrer_percent=payload.referrerPercent,
+            ),
+            messenger=container.messenger,
+            replier=CollectingReplier(),
+        )
+        if not result.ok:
+            raise DomainStateError(result.error or "Не удалось создать заявку")
+        deal = await service.get_source_exchange(source_ref)
+        if deal is None:
+            raise DomainStateError("Заявка создана, но сделка CRM не найдена")
+        response = build_deal_details(await service.get_deal(deal.id))
+        response.requestChatPosted = result.request_chat_posted
+        return response
+
+
 @router.get(
     "/deals/{deal_id}",
     response_model=DealDetailsResponse,
@@ -211,6 +327,48 @@ async def get_deal(
     _: ApiUser = Depends(require_role(UserRole.cashier)),
     service: DealService = Depends(get_deal_service),
 ) -> DealDetailsResponse:
+    return build_deal_details(await service.get_deal(deal_id))
+
+
+@router.post(
+    "/deals/{deal_id}/table",
+    response_model=DealDetailsResponse,
+    responses=error_responses(
+        status.HTTP_400_BAD_REQUEST,
+        status.HTTP_401_UNAUTHORIZED,
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+        status.HTTP_409_CONFLICT,
+    ),
+)
+async def write_exchange_deal_to_table(
+    deal_id: int,
+    request: Request,
+    user: ApiUser = Depends(require_role(UserRole.manager)),
+    service: DealService = Depends(get_deal_service),
+) -> DealDetailsResponse:
+    deal = await service.get_deal(deal_id)
+    if str(deal.deal_type) not in {"sale", "purchase"} or str(deal.source_kind) != "exchange":
+        raise DomainValidationError("Кнопка доступна только для обменов покупки и продажи")
+    if str(deal.status) not in {"new", "done"}:
+        raise DomainValidationError("Заявка уже перешла в другой статус")
+    if not deal.exchange_client_req_id:
+        raise DomainValidationError("У сделки нет связанной заявки")
+    container = request.app.state.container
+    repo = container.operational_repositories.exchange_requests
+    link = await repo.get_exchange_request_link(client_req_id=deal.exchange_client_req_id)
+    if link is None or not link.get("table_req_id"):
+        raise DomainValidationError("Не найдены параметры записи в таблицу")
+    table_req_id = str(link["table_req_id"])
+    await RequestTableDoneService(
+        sheets_gateway=container.sheets_gateway
+    ).write_exchange_request_once(
+        table_req_id=table_req_id,
+        repo=repo,
+        deal_service=service,
+        message_dt=deal.created_at,
+        actor_user_id=user.id,
+    )
     return build_deal_details(await service.get_deal(deal_id))
 
 

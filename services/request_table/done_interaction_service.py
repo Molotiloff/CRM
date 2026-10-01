@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from db_asyncpg.ports.exchange import ExchangeRequestRepositoryPort
 from gutils.requests_sheet import SheetsWriteError
 from observability import bind_log_context, logged_operation
+from services.crm.deal_service import DealService
 from services.messaging import (
     MessengerError,
     MessengerPort,
@@ -36,6 +37,7 @@ class RequestTableDoneInteractionService:
         message_builder: RequestTableMessageBuilder,
         sheets_gateway: AsyncSheetsTradeGateway,
         keyboards: RequestTableKeyboardPort | None = None,
+        deal_service: DealService | None = None,
     ) -> None:
         self.repo = repo
         self.allowed = {int(x) for x in request_chat_ids}
@@ -44,6 +46,7 @@ class RequestTableDoneInteractionService:
         self.message_builder = message_builder
         self.sheets_gateway = sheets_gateway
         self.keyboards = keyboards or NullRequestTableKeyboardPresenter()
+        self.deal_service = deal_service
 
     @logged_operation("request_table.done")
     async def handle(
@@ -94,14 +97,17 @@ class RequestTableDoneInteractionService:
 
         self.session_store.add_pending(self._SCOPE, key)
         try:
-            result = await self.done_service.write_by_payload(
-                payload=parsed,
-                message_dt=command.message_dt,
-            )
             if parsed.req_id is not None:
-                await self.repo.mark_exchange_request_table_done(
+                result = await self.done_service.write_exchange_request_once(
                     table_req_id=str(parsed.req_id),
-                    is_table_done=True,
+                    repo=self.repo,
+                    deal_service=self.deal_service,
+                    message_dt=command.message_dt,
+                )
+            else:
+                result = await self.done_service.write_by_payload(
+                    payload=parsed,
+                    message_dt=command.message_dt,
                 )
         except SheetsWriteError as e:
             logging.exception("Sheets write failed: %s", e)
@@ -148,7 +154,8 @@ class RequestTableDoneInteractionService:
             )
 
         await replier.alert(
-            self.message_builder.done_summary(result=result),
+            self.message_builder.done_summary(result=result)
+            if result is not None else "Уже занесена в таблицу ✅",
             modal=False,
         )
 

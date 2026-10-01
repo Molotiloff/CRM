@@ -15,6 +15,75 @@ from services.crm.deal_service import (
 
 
 class DealRepository(ConnectionBoundRepo):
+    async def get_by_source_ref(self, source_ref: str) -> Deal | None:
+        async with self._connection() as con:
+            deal_id = await con.fetchval(
+                "SELECT id FROM deals WHERE source='crm' AND source_kind='exchange' AND source_ref=$1",
+                source_ref,
+            )
+        return await self.get_deal(int(deal_id)) if deal_id is not None else None
+
+    async def get_by_table_req_id(self, table_req_id: str) -> Deal | None:
+        async with self._connection() as con:
+            deal_id = await con.fetchval(
+                """SELECT d.id FROM deals d JOIN exchange_request_links erl
+                   ON erl.client_req_id=d.exchange_client_req_id
+                   WHERE erl.table_req_id=$1 AND d.source_kind='exchange'
+                   ORDER BY d.id DESC LIMIT 1""",
+                table_req_id,
+            )
+        return await self.get_deal(int(deal_id)) if deal_id is not None else None
+
+    async def complete_exchange_after_table(
+        self, table_req_id: str, *, actor_user_id: int | None
+    ) -> Deal | None:
+        async with self._connection() as con:
+            async with con.transaction():
+                row = await con.fetchrow(
+                    """SELECT d.id, d.status, d.deal_type, d.source, erl.is_table_done
+                       FROM deals d JOIN exchange_request_links erl
+                         ON erl.client_req_id=d.exchange_client_req_id
+                       WHERE erl.table_req_id=$1 AND d.source_kind='exchange'
+                       ORDER BY d.id DESC LIMIT 1 FOR UPDATE OF d""",
+                    table_req_id,
+                )
+                if row is None:
+                    return None
+                if not row["is_table_done"]:
+                    raise DomainStateError("Заявка ещё не занесена в таблицу")
+                if row["deal_type"] not in {"sale", "purchase"}:
+                    return None
+                if row["status"] not in {"new", "done"}:
+                    raise DomainStateError("Сделка уже перешла в другой статус")
+                if row["status"] == "new":
+                    await con.execute(
+                        "UPDATE deals SET status='done', updated_at=NOW() WHERE id=$1",
+                        row["id"],
+                    )
+                    status_event_id = await con.fetchval(
+                        """INSERT INTO deal_status_events
+                           (deal_id, old_status, new_status, actor_user_id, payload)
+                           VALUES ($1, 'new', 'done', $2,
+                                   '{"reason":"written_to_sheets"}'::jsonb)
+                           RETURNING id""",
+                        row["id"], actor_user_id,
+                    )
+                    if row["source"] in {"tg_bot", "crm"}:
+                        await con.execute(
+                            """INSERT INTO tg_outbox (kind, payload, dedup_key)
+                               VALUES ('deal_status_changed', $1::jsonb, $2)
+                               ON CONFLICT (dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING""",
+                            json.dumps({
+                                "dealId": int(row["id"]),
+                                "statusEventId": int(status_event_id),
+                                "oldStatus": "new",
+                                "newStatus": "done",
+                                "eventPayload": {"reason": "written_to_sheets"},
+                            }),
+                            f"deal:{row['id']}:status_event:{status_event_id}",
+                        )
+        return await self.get_deal(int(row["id"]))
+
     async def list_deals(self, filters: DealListFilter) -> list[Deal]:
         async with self._connection() as con:
             rows = await con.fetch(
