@@ -16,6 +16,16 @@ log = logging.getLogger(__name__)
 class TgOutboxDeliveryRepositoryPort(Protocol):
     async def get_deal_delivery_context(self, deal_id: int) -> dict[str, Any] | None: ...
 
+    async def find_archived_deal_status_message(
+        self, chat_id: int, request_id: str
+    ) -> int | None: ...
+
+    async def get_deal_status_message(self, deal_id: int, chat_id: int) -> int | None: ...
+
+    async def save_deal_status_message(
+        self, deal_id: int, chat_id: int, message_id: int
+    ) -> None: ...
+
 
 class DealTelegramSyncService:
     TERMINAL_STATUSES = frozenset({"done", "canceled"})
@@ -43,6 +53,16 @@ class DealTelegramSyncService:
         context = await self._repository.get_deal_delivery_context(deal_id)
         if context is None:
             raise LookupError(f"Deal {deal_id} was not found for Telegram delivery")
+        if (
+            item.kind == "deal_status_changed"
+            and context.get("status") is not None
+            and str(context["status"]) != status
+        ):
+            log.debug(
+                "Skipping outdated status notification deal_id=%s event_status=%s current_status=%s",
+                deal_id, status, context["status"],
+            )
+            return
 
         body = _mapping(context.get("body"))
         bind_log_context(
@@ -107,14 +127,43 @@ class DealTelegramSyncService:
             request_id = str(
                 body.get("client_req_id") or body.get("req_id") or context.get("deal_no")
             )
-            await self._messenger.send(
+            await self._sync_client_status_message(
+                deal_id=deal_id,
                 chat_id=client_chat_id,
+                request_id=request_id,
                 text=self._builder.notification(
-                    request_id=request_id,
-                    status=status,
-                    payload=event_payload,
+                    request_id=request_id, status=status, payload=event_payload
                 ),
             )
+
+    async def _sync_client_status_message(
+        self, *, deal_id: int, chat_id: int, request_id: str, text: str
+    ) -> None:
+        message_id = await self._repository.get_deal_status_message(deal_id, chat_id)
+        if message_id is None:
+            message_id = await self._repository.find_archived_deal_status_message(
+                chat_id, request_id
+            )
+            if message_id is not None:
+                await self._repository.save_deal_status_message(
+                    deal_id, chat_id, message_id
+                )
+        if message_id is not None:
+            try:
+                await self._messenger.edit_text(chat_id, message_id, text)
+            except MessengerError as exc:
+                if not exc.benign:
+                    raise
+                log.debug(
+                    "Deal status message already unavailable or unchanged "
+                    "deal_id=%s chat_id=%s message_id=%s: %s",
+                    deal_id, chat_id, message_id, exc,
+                )
+            return
+        sent = await self._messenger.send(chat_id=chat_id, text=text)
+        await self._repository.save_deal_status_message(
+            deal_id, chat_id, sent.message_id
+        )
 
     async def _deliver_settlement_review(self, payload: Mapping[str, Any]) -> None:
         text = (

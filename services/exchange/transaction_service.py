@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from decimal import Decimal
 
+from domain import DealStatus, DomainStateError
 from services.accounting.fulfillment_models import (
     EnqueueFulfillment,
     FulfillmentRequestKind,
 )
 from services.act_counter import AppliedExchangeMovement
-from services.crm.deal_service import DealCreateCommand
+from services.crm.deal_service import DealCreateCommand, DealService, DealStatusCommand
 from services.unit_of_work import UnitOfWorkFactory
 
 from .balance_service import ExchangeBalanceService
+from .workflow_policy import tracked_exchange_currencies
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +74,7 @@ class CancelExchangeTransaction:
     receive_is_deposit: bool
     pay_is_withdraw: bool
     tracked_currency_codes: frozenset[str] | None = None
+    request_chat_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +91,7 @@ class EditExchangeTransactionResult:
 class CancelExchangeTransactionResult:
     receive_operation_sign: str | None
     pay_operation_sign: str | None
+    client_id: int
 
 
 class ExchangeTransactionService:
@@ -95,9 +102,11 @@ class ExchangeTransactionService:
         *,
         unit_of_work_factory: UnitOfWorkFactory,
         balance_service: ExchangeBalanceService,
+        deal_service: DealService | None = None,
     ) -> None:
         self._unit_of_work_factory = unit_of_work_factory
         self._balance_service = balance_service
+        self._deal_service = deal_service
 
     async def create(self, command: CreateExchangeTransaction) -> CreateExchangeTransactionResult:
         async with self._unit_of_work_factory() as unit_of_work:
@@ -176,9 +185,48 @@ class ExchangeTransactionService:
         return EditExchangeTransactionResult(tuple(movements))
 
     async def cancel(self, command: CancelExchangeTransaction) -> CancelExchangeTransactionResult:
+        updated_deal = None
         async with self._unit_of_work_factory() as unit_of_work:
+            deal = await unit_of_work.deals.get_by_exchange_request_id(command.request_id)
+            if deal is not None and deal.status in {DealStatus.DONE, DealStatus.CANCELED}:
+                raise DomainStateError(f"Сделка уже имеет статус {deal.status}")
+            if not await unit_of_work.exchange_requests.claim_exchange_request_cancellation(
+                client_req_id=command.request_id
+            ):
+                raise DomainStateError("Заявка уже отменена или связь с ней не найдена")
+            client_id = int(deal.client_id) if deal is not None and deal.client_id else command.client_id
+            receive_is_deposit = command.receive_is_deposit
+            pay_is_withdraw = command.pay_is_withdraw
+            tracked_codes = command.tracked_currency_codes
+            if deal is not None:
+                body = deal.body.to_dict()
+                if isinstance(body.get("recv_is_deposit"), bool):
+                    receive_is_deposit = body["recv_is_deposit"]
+                    pay_is_withdraw = body["pay_is_withdraw"]
+                elif str(deal.source) == "crm":
+                    receive_is_deposit = pay_is_withdraw = True
+                else:
+                    try:
+                        origin_chat_id = int(str(deal.source_ref).split(":", 1)[0])
+                    except (TypeError, ValueError):
+                        origin_chat_id = command.chat_id
+                    origin_is_request = (
+                        command.request_chat_id is not None
+                        and origin_chat_id == command.request_chat_id
+                    )
+                    receive_is_deposit = pay_is_withdraw = origin_is_request
+                if str(deal.source) != "crm":
+                    try:
+                        origin_chat_id = int(str(deal.source_ref).split(":", 1)[0])
+                        tracked_codes = tracked_exchange_currencies(
+                            origin_chat_id, command.request_chat_id
+                        )
+                    except (TypeError, ValueError):
+                        pass
+                else:
+                    tracked_codes = None
             receive_sign, pay_sign = await self._balance_service.apply_cancel(
-                client_id=command.client_id,
+                client_id=client_id,
                 chat_id=command.chat_id,
                 message_id=command.card_message_id,
                 req_id=command.request_id,
@@ -186,23 +234,34 @@ class ExchangeTransactionService:
                 recv_amount=command.receive_amount,
                 pay_code=command.pay_code,
                 pay_amount=command.pay_amount,
-                recv_is_deposit=command.receive_is_deposit,
-                pay_is_withdraw=command.pay_is_withdraw,
-                tracked_currency_codes=_mutable_codes(command.tracked_currency_codes),
+                recv_is_deposit=receive_is_deposit,
+                pay_is_withdraw=pay_is_withdraw,
+                tracked_currency_codes=_mutable_codes(tracked_codes),
                 unit_of_work=unit_of_work,
             )
-            status_updated = await unit_of_work.exchange_requests.set_exchange_request_status(
-                client_req_id=command.request_id,
-                status="cancelled",
-            )
-            if not status_updated:
-                await unit_of_work.exchange_requests.upsert_exchange_request_link(
-                    client_req_id=command.request_id,
-                    table_req_id=command.table_request_id,
-                    status="cancelled",
+            if deal is not None:
+                changed = await unit_of_work.deals.change_status(
+                    deal.id,
+                    DealStatusCommand(
+                        status=DealStatus.CANCELED,
+                        expected_old_status=deal.status,
+                        actor_user_id=None,
+                        payload={"reason": "exchange_cancelled_in_telegram"},
+                    ),
                 )
+                if changed is None:
+                    raise DomainStateError(f"CRM deal for request {command.request_id} disappeared")
+                updated_deal = changed[0]
             await unit_of_work.commit()
-        return CancelExchangeTransactionResult(receive_sign, pay_sign)
+        if updated_deal is not None and self._deal_service is not None:
+            try:
+                await self._deal_service.publish_committed_status_change(
+                    updated_deal, new_status=DealStatus.CANCELED,
+                    payload={"reason": "exchange_cancelled_in_telegram"},
+                )
+            except Exception:
+                log.exception("Failed to publish canceled exchange %s", command.request_id)
+        return CancelExchangeTransactionResult(receive_sign, pay_sign, client_id)
 
 
 def _mutable_codes(codes: frozenset[str] | None) -> set[str] | None:

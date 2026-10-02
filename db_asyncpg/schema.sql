@@ -780,6 +780,14 @@ CREATE INDEX IF NOT EXISTS idx_client_comments_client
     ON client_comments(client_id, id) WHERE deleted_at IS NULL;
 
 -- Outbox для Telegram (спека 2.2) --------------------------------------------------
+CREATE TABLE IF NOT EXISTS deal_status_messages (
+    deal_id BIGINT NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
+    chat_id BIGINT NOT NULL,
+    message_id BIGINT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (deal_id, chat_id)
+);
+
 CREATE TABLE IF NOT EXISTS tg_outbox (
     id BIGSERIAL PRIMARY KEY,
     kind TEXT NOT NULL,                          -- 'edit_request_card' | 'notify_client' | ...

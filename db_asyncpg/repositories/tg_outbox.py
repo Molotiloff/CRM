@@ -18,6 +18,47 @@ class TgOutboxItem:
 
 
 class TgOutboxRepository(ConnectionBoundRepo):
+    async def find_archived_deal_status_message(
+        self, chat_id: int, request_id: str
+    ) -> int | None:
+        async with self._connection() as con:
+            message_id = await con.fetchval(
+                """SELECT m.telegram_message_id
+                   FROM message_archive_messages m
+                   JOIN message_archive_chats c ON c.id=m.chat_id
+                   WHERE c.telegram_chat_id=$1
+                     AND m.direction='outbound' AND m.source='bot_api'
+                     AND split_part(m.text_plain, E'\n', 1)=$2
+                     AND split_part(m.text_plain, E'\n', 2) LIKE 'Новый статус:%'
+                   ORDER BY m.sent_at ASC, m.telegram_message_id ASC LIMIT 1""",
+                chat_id,
+                f"Заявка: {request_id}",
+            )
+        return int(message_id) if message_id is not None else None
+
+    async def get_deal_status_message(self, deal_id: int, chat_id: int) -> int | None:
+        async with self._connection() as con:
+            message_id = await con.fetchval(
+                "SELECT message_id FROM deal_status_messages WHERE deal_id=$1 AND chat_id=$2",
+                deal_id,
+                chat_id,
+            )
+        return int(message_id) if message_id is not None else None
+
+    async def save_deal_status_message(
+        self, deal_id: int, chat_id: int, message_id: int
+    ) -> None:
+        async with self._connection() as con:
+            await con.execute(
+                """INSERT INTO deal_status_messages (deal_id, chat_id, message_id)
+                   VALUES ($1, $2, $3)
+                   ON CONFLICT (deal_id, chat_id) DO UPDATE SET
+                     message_id=EXCLUDED.message_id, updated_at=now()""",
+                deal_id,
+                chat_id,
+                message_id,
+            )
+
     async def count_pending(self, *, max_attempts: int = 5) -> int:
         async with self._connection() as con:
             value = await con.fetchval(

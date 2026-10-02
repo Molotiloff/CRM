@@ -30,6 +30,57 @@ async def test_exchange_status_edits_both_cards_and_notifies_client() -> None:
 
 
 @pytest.mark.asyncio
+async def test_completion_edits_first_status_notification_instead_of_sending_new_one() -> None:
+    messenger = FakeMessenger()
+    repository = FakeDeliveryRepository()
+    service = DealTelegramSyncService(repository=repository, messenger=messenger)
+
+    await service.deliver(_item(status="awaiting_payment"))
+    first_message = messenger.sent_to(-100500)[0]
+    await service.deliver(_item(status="done"))
+
+    assert len(messenger.sent_to(-100500)) == 1
+    status_edit = next(
+        edit for edit in messenger.edits
+        if edit.chat_id == -100500 and edit.message_id == first_message.message_id
+    )
+    assert "Сделка завершена" in (status_edit.text or "")
+    assert repository.status_message_id == first_message.message_id
+
+
+@pytest.mark.asyncio
+async def test_completion_recovers_earlier_status_notification_from_archive() -> None:
+    messenger = FakeMessenger()
+    repository = FakeDeliveryRepository()
+    repository.archived_message_id = 1960
+    service = DealTelegramSyncService(repository=repository, messenger=messenger)
+
+    await service.deliver(_item(status="done"))
+
+    assert messenger.sent_to(-100500) == []
+    assert repository.status_message_id == 1960
+    assert any(
+        edit.chat_id == -100500
+        and edit.message_id == 1960
+        and "Сделка завершена" in (edit.text or "")
+        for edit in messenger.edits
+    )
+
+
+@pytest.mark.asyncio
+async def test_delayed_older_status_cannot_replace_completed_notification() -> None:
+    messenger = FakeMessenger()
+    repository = FakeDeliveryRepository()
+    repository.current_status = "done"
+    service = DealTelegramSyncService(repository=repository, messenger=messenger)
+
+    await service.deliver(_item(status="awaiting_payment"))
+
+    assert messenger.sent == []
+    assert messenger.edits == []
+
+
+@pytest.mark.asyncio
 async def test_terminal_status_strips_card_keyboards() -> None:
     messenger = FakeMessenger()
     service = DealTelegramSyncService(
@@ -157,10 +208,31 @@ async def test_balance_shortage_notifies_request_chat() -> None:
 
 
 class FakeDeliveryRepository:
+    status_message_id: int | None = None
+    archived_message_id: int | None = None
+    current_status: str | None = None
+
+    async def find_archived_deal_status_message(
+        self, chat_id: int, request_id: str
+    ) -> int | None:
+        assert (chat_id, request_id) == (-100500, "12345678")
+        return self.archived_message_id
+
+    async def get_deal_status_message(self, deal_id: int, chat_id: int) -> int | None:
+        assert (deal_id, chat_id) == (7, -100500)
+        return self.status_message_id
+
+    async def save_deal_status_message(
+        self, deal_id: int, chat_id: int, message_id: int
+    ) -> None:
+        assert (deal_id, chat_id) == (7, -100500)
+        self.status_message_id = message_id
+
     async def get_deal_delivery_context(self, deal_id: int):
         assert deal_id == 7
         return {
             "id": 7,
+            "status": self.current_status,
             "deal_no": 100007,
             "source_kind": "exchange",
             "client_chat_id": -100500,
@@ -181,6 +253,24 @@ class FakeDeliveryRepository:
 
 
 class FakeCashDeliveryRepository:
+    status_message_id: int | None = None
+
+    async def find_archived_deal_status_message(
+        self, chat_id: int, request_id: str
+    ) -> int | None:
+        assert (chat_id, request_id) == (-100500, "Б-123456")
+        return None
+
+    async def get_deal_status_message(self, deal_id: int, chat_id: int) -> int | None:
+        assert (deal_id, chat_id) == (7, -100500)
+        return self.status_message_id
+
+    async def save_deal_status_message(
+        self, deal_id: int, chat_id: int, message_id: int
+    ) -> None:
+        assert (deal_id, chat_id) == (7, -100500)
+        self.status_message_id = message_id
+
     async def get_deal_delivery_context(self, deal_id: int):
         assert deal_id == 7
         return {
