@@ -123,7 +123,14 @@ class DealTelegramSyncService:
                 )
 
         client_chat_id = _int_or_none(context.get("client_chat_id"))
-        if client_chat_id is not None and item.kind == "deal_status_changed":
+        suppress_completed_exchange_notification = (
+            status == "done" and context.get("source_kind") == "exchange"
+        )
+        if (
+            client_chat_id is not None
+            and item.kind == "deal_status_changed"
+            and not suppress_completed_exchange_notification
+        ):
             request_id = str(
                 body.get("client_req_id") or body.get("req_id") or context.get("deal_no")
             )

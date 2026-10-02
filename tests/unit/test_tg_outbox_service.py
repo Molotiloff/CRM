@@ -30,41 +30,63 @@ async def test_exchange_status_edits_both_cards_and_notifies_client() -> None:
 
 
 @pytest.mark.asyncio
-async def test_completion_edits_first_status_notification_instead_of_sending_new_one() -> None:
+async def test_next_nonterminal_status_edits_first_notification() -> None:
     messenger = FakeMessenger()
     repository = FakeDeliveryRepository()
+    repository.source = "crm"
     service = DealTelegramSyncService(repository=repository, messenger=messenger)
 
-    await service.deliver(_item(status="awaiting_payment"))
+    await service.deliver(_item(status="fixed"))
     first_message = messenger.sent_to(-100500)[0]
-    await service.deliver(_item(status="done"))
+    await service.deliver(_item(status="awaiting_payment"))
 
     assert len(messenger.sent_to(-100500)) == 1
     status_edit = next(
         edit for edit in messenger.edits
         if edit.chat_id == -100500 and edit.message_id == first_message.message_id
     )
-    assert "Сделка завершена" in (status_edit.text or "")
+    assert "Ожидаем оплату" in (status_edit.text or "")
     assert repository.status_message_id == first_message.message_id
 
 
 @pytest.mark.asyncio
-async def test_completion_recovers_earlier_status_notification_from_archive() -> None:
+async def test_nonterminal_status_recovers_earlier_notification_from_archive() -> None:
     messenger = FakeMessenger()
     repository = FakeDeliveryRepository()
+    repository.source = "crm"
     repository.archived_message_id = 1960
     service = DealTelegramSyncService(repository=repository, messenger=messenger)
 
-    await service.deliver(_item(status="done"))
+    await service.deliver(_item(status="awaiting_payment"))
 
     assert messenger.sent_to(-100500) == []
     assert repository.status_message_id == 1960
     assert any(
         edit.chat_id == -100500
         and edit.message_id == 1960
-        and "Сделка завершена" in (edit.text or "")
+        and "Ожидаем оплату" in (edit.text or "")
         for edit in messenger.edits
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["tg_bot", "crm"])
+async def test_exchange_completion_only_edits_cards(source: str) -> None:
+    messenger = FakeMessenger()
+    repository = FakeDeliveryRepository()
+    repository.source = source
+    service = DealTelegramSyncService(repository=repository, messenger=messenger)
+
+    await service.deliver(_item(status="done"))
+
+    assert messenger.sent_to(-100500) == []
+    assert repository.status_message_id is None
+    assert {(edit.chat_id, edit.message_id) for edit in messenger.edits} == {
+        (-100500, 101),
+        (-777001, 202),
+    }
+    client_card = next(edit for edit in messenger.edits if edit.chat_id == -100500)
+    assert "Проведена" in (client_card.text or "")
 
 
 @pytest.mark.asyncio
@@ -211,6 +233,7 @@ class FakeDeliveryRepository:
     status_message_id: int | None = None
     archived_message_id: int | None = None
     current_status: str | None = None
+    source: str = "tg_bot"
 
     async def find_archived_deal_status_message(
         self, chat_id: int, request_id: str
@@ -233,6 +256,7 @@ class FakeDeliveryRepository:
         return {
             "id": 7,
             "status": self.current_status,
+            "source": self.source,
             "deal_no": 100007,
             "source_kind": "exchange",
             "client_chat_id": -100500,

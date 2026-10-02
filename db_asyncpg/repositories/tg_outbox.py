@@ -161,7 +161,7 @@ class TgOutboxRepository(ConnectionBoundRepo):
         async with self._connection() as con:
             row = await con.fetchrow(
                 """
-                SELECT d.id, d.deal_no, d.deal_type, d.status, d.source_kind, d.comment,
+                SELECT d.id, d.deal_no, d.deal_type, d.status, d.source, d.source_kind, d.comment,
                        d.exchange_client_req_id, d.body::text AS body,
                        c.chat_id AS client_chat_id,
                        erl.client_chat_id AS exchange_client_chat_id,
