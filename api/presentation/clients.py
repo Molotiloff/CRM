@@ -125,6 +125,7 @@ def _client_dto(
         initials=initials(str(client["name"] or "")),
         telegramUsername="",
         telegramChatId=str(client["chat_id"]),
+        telegramInviteLink=client.get("telegram_invite_link"),
         dealsCount=deals_count,
         turnoverRub=float_value(turnover_rub),
         managerName="—",

@@ -2,12 +2,17 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Request, status
 
-from api.dependencies import get_current_user
-from api.models import ApiUser
+from api.dependencies import get_current_user, require_role
+from api.models import ApiUser, UserRole
 from api.openapi import error_responses
-from api.queries import ClientQueryService
+from api.queries import ClientNotFoundError, ClientQueryService
 from api.queries.clients import ClientListQuery
-from api.schemas.clients import ClientDto, ClientsPageResponse, ClientTransactionsResponse
+from api.schemas.clients import (
+    ClientDto,
+    ClientsPageResponse,
+    ClientTelegramInviteLinkUpdate,
+    ClientTransactionsResponse,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["clients"])
 
@@ -47,6 +52,35 @@ async def get_client(
     _: ApiUser = Depends(get_current_user),
     queries: ClientQueryService = Depends(get_client_queries),
 ) -> ClientDto:
+    return await queries.get_client(client_id)
+
+
+@router.patch(
+    "/clients/{client_id}/telegram-invite-link",
+    response_model=ClientDto,
+    responses=error_responses(
+        status.HTTP_400_BAD_REQUEST,
+        status.HTTP_401_UNAUTHORIZED,
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+    ),
+)
+async def update_client_telegram_invite_link(
+    client_id: int,
+    payload: ClientTelegramInviteLinkUpdate,
+    request: Request,
+    _: ApiUser = Depends(require_role(UserRole.manager)),
+    queries: ClientQueryService = Depends(get_client_queries),
+) -> ClientDto:
+    async with request.app.state.container.pool.acquire() as connection:
+        updated_id = await connection.fetchval(
+            """UPDATE clients SET telegram_invite_link=$2
+               WHERE id=$1 AND is_active RETURNING id""",
+            client_id,
+            payload.telegramInviteLink,
+        )
+    if updated_id is None:
+        raise ClientNotFoundError(client_id)
     return await queries.get_client(client_id)
 
 

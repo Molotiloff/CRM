@@ -38,6 +38,7 @@ EXPECTED_SUCCESS_MODELS: dict[RouteKey, tuple[int, object]] = {
     ("GET", "/api/v1/me"): (200, ApiUser),
     ("GET", "/api/v1/clients"): (200, ClientsPageResponse),
     ("GET", "/api/v1/clients/{client_id}"): (200, ClientDto),
+    ("PATCH", "/api/v1/clients/{client_id}/telegram-invite-link"): (200, ClientDto),
     ("GET", "/api/v1/clients/{client_id}/transactions"): (
         200,
         ClientTransactionsResponse,
@@ -80,6 +81,9 @@ EXPECTED_ERROR_STATUSES: dict[RouteKey, frozenset[int]] = {
     ("GET", "/api/v1/me"): AUTH_ERRORS,
     ("GET", "/api/v1/clients"): AUTH_ERRORS,
     ("GET", "/api/v1/clients/{client_id}"): frozenset({401, 404}),
+    ("PATCH", "/api/v1/clients/{client_id}/telegram-invite-link"): frozenset(
+        {400, 401, 403, 404}
+    ),
     ("GET", "/api/v1/clients/{client_id}/transactions"): frozenset({401, 404}),
     ("GET", "/api/v1/balances"): AUTH_ERRORS,
     ("GET", "/api/v1/dashboard"): frozenset({401, 403, 503}),

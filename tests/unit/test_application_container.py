@@ -84,5 +84,6 @@ async def test_container_builds_shared_api_and_telegram_graph() -> None:
     assert runtime.tg_outbox_worker._metrics is container.metrics
     assert runtime.payment_watch_poller is not None
     assert runtime.payment_watch_poller.service._metrics is container.metrics
+    assert runtime.client_invite_link_backfill is not None
     assert runtime.market_ws_service is not None
     assert len(dispatcher.sub_routers) > 10

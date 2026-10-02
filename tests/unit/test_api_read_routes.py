@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -77,6 +78,7 @@ class FakeReadRepository:
                 "client_id": 1,
                 "client_name": "Test Client",
                 "chat_id": -100,
+                "telegram_invite_link": "https://t.me/+balance123",
                 "currency_code": "USDT",
                 "balance": Decimal("10"),
                 "precision": 2,
@@ -134,6 +136,7 @@ def test_clients_route_returns_frontend_page_dto() -> None:
     data = response.json()
     assert data["totalClients"] == 1
     assert data["clients"][0]["id"] == "1"
+    assert data["clients"][0]["telegramInviteLink"] == "https://t.me/+client123"
     assert data["clients"][0]["balances"][1] == {"currency": "USDT", "amount": -10.5}
     assert data["clients"][0]["recentDeals"][0]["id"] == "#10"
     ClientsPageResponse.model_validate(data)
@@ -155,6 +158,43 @@ def test_client_detail_route_returns_documented_not_found_contract() -> None:
     assert error.detail == "Client 404 not found"
 
 
+def test_manager_can_save_client_telegram_invite_link() -> None:
+    app = _app(role=UserRole.manager)
+
+    class FakeConnection:
+        async def fetchval(self, query: str, client_id: int, link: str) -> int:
+            assert "UPDATE clients SET telegram_invite_link" in query
+            assert client_id == 1
+            assert link == "https://t.me/+client123"
+            return client_id
+
+    class FakeAcquire:
+        async def __aenter__(self) -> FakeConnection:
+            return FakeConnection()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    app.state.container = SimpleNamespace(
+        pool=SimpleNamespace(acquire=lambda: FakeAcquire())
+    )
+    response = TestClient(app).patch(
+        "/api/v1/clients/1/telegram-invite-link",
+        json={"telegramInviteLink": "https://t.me/+client123"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["telegramInviteLink"] == "https://t.me/+client123"
+
+
+def test_cashier_cannot_save_client_telegram_invite_link() -> None:
+    response = TestClient(_app(role=UserRole.cashier)).patch(
+        "/api/v1/clients/1/telegram-invite-link",
+        json={"telegramInviteLink": "https://t.me/+client123"},
+    )
+    assert response.status_code == 403
+
+
 def test_balances_route_returns_snapshot_dto() -> None:
     client = TestClient(_app())
 
@@ -163,6 +203,7 @@ def test_balances_route_returns_snapshot_dto() -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["clients"][0]["balanceRub"] == 800
+    assert data["clients"][0]["telegramInviteLink"] == "https://t.me/+balance123"
     assert data["summaries"][-1] == {
         "code": "ALL",
         "label": "Все балансы",
@@ -393,6 +434,7 @@ def _client_row() -> dict:
     return {
         "id": 1,
         "chat_id": -100,
+        "telegram_invite_link": "https://t.me/+client123",
         "name": "Test Client",
         "client_group": "VIP",
         "created_at": datetime(2026, 7, 31, 8, 0, tzinfo=UTC),

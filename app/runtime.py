@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from aiogram import Bot
 
 from config import Config
+from services.admin_client.invite_link_backfill import ClientInviteLinkBackfill
 from services.aml import AMLQueueService
 from services.lifecycle import (
     AsyncLifecycle,
@@ -31,6 +32,7 @@ class BotRuntimeServices:
     payment_watch_poller: PaymentWatchPoller | None = None
     tg_outbox_worker: TgOutboxWorker | None = None
     message_archive: AsyncLifecycle | None = None
+    client_invite_link_backfill: ClientInviteLinkBackfill | None = None
     _supervisor: LifecycleSupervisor | None = field(default=None, init=False)
 
     async def start(self, *, bot: Bot, config: Config) -> None:
@@ -71,6 +73,7 @@ class BotRuntimeServices:
             ("AML queue service", self.aml_queue_service),
             ("Telegram outbox worker", self.tg_outbox_worker),
             ("Message archive", self.message_archive),
+            ("Client invite-link backfill", self.client_invite_link_backfill),
             ("Rapira websocket service", self.market_ws_service),
         )
         return tuple(

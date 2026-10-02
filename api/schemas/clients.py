@@ -1,6 +1,17 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from api.telegram_links import normalize_telegram_invite_link
+
+
+class ClientTelegramInviteLinkUpdate(BaseModel):
+    telegramInviteLink: str | None = Field(max_length=256)
+
+    @field_validator("telegramInviteLink")
+    @classmethod
+    def validate_invite_link(cls, value: str | None) -> str | None:
+        return normalize_telegram_invite_link(value)
 
 
 class ClientBalanceDto(BaseModel):
@@ -30,6 +41,7 @@ class ClientDto(BaseModel):
     initials: str
     telegramUsername: str
     telegramChatId: str
+    telegramInviteLink: str | None = None
     dealsCount: int
     turnoverRub: float
     managerName: str

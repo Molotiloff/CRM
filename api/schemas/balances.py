@@ -12,6 +12,7 @@ class BalanceClientDto(BaseModel):
     balanceRub: float
     initials: str
     telegramChatId: str | None = None
+    telegramInviteLink: str | None = None
 
 
 class CurrencySummaryDto(BaseModel):

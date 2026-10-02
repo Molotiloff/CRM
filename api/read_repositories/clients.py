@@ -36,7 +36,8 @@ class ClientReadRepository(ConnectionBoundRepo):
         async with self._connection() as con:
             rows = await con.fetch(
                 """
-                SELECT c.id, c.chat_id, c.name, c.client_group, c.created_at
+                SELECT c.id, c.chat_id, c.name, c.client_group,
+                       c.telegram_invite_link, c.created_at
                 FROM clients c
                 WHERE c.is_active
                   AND ($1::text IS NULL OR c.name ILIKE '%' || $1 || '%'
@@ -57,7 +58,8 @@ class ClientReadRepository(ConnectionBoundRepo):
         async with self._connection() as con:
             row = await con.fetchrow(
                 """
-                SELECT c.id, c.chat_id, c.name, c.client_group, c.created_at
+                SELECT c.id, c.chat_id, c.name, c.client_group,
+                       c.telegram_invite_link, c.created_at
                 FROM clients c
                 WHERE c.id = $1 AND c.is_active
                 """,

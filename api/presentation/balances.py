@@ -27,6 +27,7 @@ def build_balances_snapshot(
             ),
             initials=initials(str(row["client_name"] or "")),
             telegramChatId=str(row["chat_id"]) if row.get("chat_id") is not None else None,
+            telegramInviteLink=row.get("telegram_invite_link"),
         )
         for row in rows
     ]

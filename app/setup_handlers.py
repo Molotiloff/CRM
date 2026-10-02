@@ -7,6 +7,7 @@ from app.lifecycle import SchedulerLifecycleAdapter
 from app.office_cards import OFFICE_CARDS
 from app.runtime import BotRuntimeServices
 from db_asyncpg.repositories.client_closure import ClientClosureRepo
+from db_asyncpg.repositories.client_invite_links import ClientInviteLinkRepo
 from handlers import (
     AcceptShortHandler,
     ActHandler,
@@ -48,6 +49,7 @@ from services.admin_client import (
     NonZeroWalletQueryService,
     UsdtWalletService,
 )
+from services.admin_client.invite_link_backfill import ClientInviteLinkBackfill
 from services.aml import AMLQueueService, AMLService, ThreadedAMLChecker
 from services.best_change import (
     BestChangeMonthlyReportPublisher,
@@ -115,6 +117,7 @@ from telegram_adapters import (
     ChatLockRegistry,
     CityCashMediaStore,
 )
+from telegram_adapters.client_invite_links import AiogramClientInviteLinkGateway
 from telegram_adapters.message_archive import AiogramArchiveMediaSource
 
 
@@ -152,6 +155,10 @@ def setup_handlers(
     }
 
     services = BotRuntimeServices()
+    services.client_invite_link_backfill = ClientInviteLinkBackfill(
+        gateway=AiogramClientInviteLinkGateway(bot),
+        repository=ClientInviteLinkRepo(container.pool),
+    )
     if config.message_archive_enabled:
         archive_repository = container.crm_repositories.message_archive
         archive_metrics = ArchiveRuntimeMetrics()

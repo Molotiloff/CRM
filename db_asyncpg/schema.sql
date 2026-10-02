@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS clients (
     chat_id BIGINT NOT NULL UNIQUE,
     name TEXT NOT NULL,
     client_group TEXT,
+    telegram_invite_link TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     deactivated_at TIMESTAMPTZ,

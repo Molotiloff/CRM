@@ -20,6 +20,7 @@ class BalanceReadRepository(ConnectionBoundRepo):
                 """
                 SELECT
                     c.id AS client_id, c.name AS client_name, c.chat_id,
+                    c.telegram_invite_link,
                     a.currency_code, a.balance, a.precision
                 FROM client_accounts a
                 JOIN clients c ON c.id = a.client_id
