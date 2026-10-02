@@ -41,15 +41,14 @@ OFFICE_CARDS: dict[str, OfficeCard] = {
     ),
     "тюм": OfficeCard(
             command="тюм",
-            photo_file_id="AgACAgIAAxkDAALZH2naOUCgl2XvCLVcTl_YjKWtWL90AAKXE2sbts3QSnOXOJXlPPi0AQADAgADeQADOwQ",
+            photo_file_id=None,
             image_path=Path("images/tum_office.jpeg"),
             caption=(
                 "📍 <b>Адрес офиса:</b>\n"
                 "г. Тюмень, ул. <b>Чернышевского, 1Б</b>\n"
                 "БЦ <b>«Резидент»</b>, 7 этаж, офис 709\n\n"
                 "🚗 <b>Парковка:</b>\n"
-                "Подземный паркинг БЦ.\n"
-                "Пожалуйста, заранее сообщите номер и марку автомобиля, чтобы мы оформили въезд.\n\n"
+                "Въезд с <b>ул. Чернышевского.</b>"
             ),
         ),
 }
