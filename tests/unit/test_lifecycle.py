@@ -314,8 +314,8 @@ def test_runtime_supervises_all_background_components() -> None:
     assert [component.name for component in runtime._lifecycle_components()] == [
         "Daily balances scheduler",
         "BestChange month report scheduler",
-        "AML queue service",
         "Payment watch poller",
+        "AML queue service",
         "Telegram outbox worker",
         "Rapira websocket service",
     ]

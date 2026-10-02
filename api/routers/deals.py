@@ -12,6 +12,7 @@ from api.models import ApiUser, UserRole
 from api.openapi import error_responses
 from api.presentation.deals import build_deal_details, build_deals_page
 from api.schemas.deals import (
+    CashDealCreateRequest,
     ClientTransferCreateRequest,
     DealCancelRequest,
     DealCreateRequest,
@@ -29,6 +30,8 @@ from api.schemas.deals import (
 )
 from domain import DomainStateError, DomainValidationError
 from domain.accounting_flows import SettlementResolution as DomainSettlementResolution
+from services.cash_requests.create_cash_request import CreateCashRequest, CreateCashRequestParams
+from services.cash_requests.parsing import ParsedRequest
 from services.crm.client_transfer_service import ClientTransferCommand, ClientTransferService
 from services.crm.deal_service import (
     DealCreateCommand,
@@ -43,18 +46,18 @@ from services.crm.deal_source_mutation import (
     ExchangeSourceEdit,
 )
 from services.crm.telegram_deal_registrar import exchange_type_from_firm_perspective
-from services.exchange.create_exchange_request import CreateExchangeParams, CreateExchangeRequest
-from services.messaging import CollectingReplier, DeferredMessenger
+from services.exchange.create_exchange_request import CreateExchangeParams
+from services.messaging import ClientChatReplier, DeferredMessenger
 from services.payment_watch.settlement_models import (
     ReplacementExchange,
     ResolveSettlementCommand,
 )
 from services.payment_watch.settlement_service import DealSettlementService
 from services.request_table.table_done_service import RequestTableDoneService
-from telegram_adapters import AiogramExchangeKeyboardPresenter
 
 router = APIRouter(prefix="/api/v1", tags=["deals"])
 _exchange_creation_lock = asyncio.Lock()
+_cash_creation_lock = asyncio.Lock()
 
 
 def get_deal_service(request: Request) -> DealService:
@@ -266,24 +269,7 @@ async def create_exchange_deal(
             ) if existing.exchange_client_req_id else None
             response.requestChatPosted = bool(link and link.get("request_message_id"))
             return response
-        exchange = container.exchange
-        use_case = CreateExchangeRequest(
-            repo=container.operational_repositories.exchange_commands,
-            request_chat_id=container.config.request_chat_id,
-            balance_service=exchange.balance,
-            calculator=exchange.calculator,
-            text_builder=exchange.text_builder,
-            unit_of_work_factory=exchange.unit_of_work_factory,
-            keyboards=AiogramExchangeKeyboardPresenter(),
-            act_counter_service=exchange.act_counter,
-            deal_registrar=container.crm.telegram_registrar,
-            transaction_service=exchange.transaction,
-            source_links=exchange.source_links,
-            notification_builder=exchange.notifications,
-            wallet_presenter=exchange.wallet_presenter,
-            metrics=container.metrics,
-        )
-        result = await use_case.execute_core(
+        result = await container.exchange.accept_short.create_request(
             CreateExchangeParams(
                 chat_id=chat_id,
                 chat_name=str(client["name"]),
@@ -301,7 +287,7 @@ async def create_exchange_deal(
                 referrer_percent=payload.referrerPercent,
             ),
             messenger=container.messenger,
-            replier=CollectingReplier(),
+            replier=ClientChatReplier(container.messenger, chat_id),
         )
         if not result.ok:
             raise DomainStateError(result.error or "Не удалось создать заявку")
@@ -309,6 +295,116 @@ async def create_exchange_deal(
         if deal is None:
             raise DomainStateError("Заявка создана, но сделка CRM не найдена")
         response = build_deal_details(await service.get_deal(deal.id))
+        response.requestChatPosted = result.request_chat_posted
+        return response
+
+
+@router.post(
+    "/deals/cash",
+    response_model=DealDetailsResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=error_responses(
+        status.HTTP_400_BAD_REQUEST, status.HTTP_401_UNAUTHORIZED,
+        status.HTTP_403_FORBIDDEN, status.HTTP_409_CONFLICT,
+    ),
+)
+async def create_cash_deal(
+    payload: CashDealCreateRequest,
+    request: Request,
+    user: ApiUser = Depends(require_role(UserRole.manager)),
+    service: DealService = Depends(get_deal_service),
+) -> DealDetailsResponse:
+    currency = payload.currency.strip().upper()
+    if currency not in {"EUR", "EUR500", "USD", "RUB", "USDW", "THB"}:
+        raise DomainValidationError("Недоступная валюта кассовой заявки")
+    container = request.app.state.container
+    if isinstance(container.messenger, DeferredMessenger):
+        raise DomainStateError("Отправка заявок в Telegram сейчас недоступна")
+    city = container.cash.router.normalize_city(payload.city)
+    request_chat_id = container.cash.router.pick_request_chat_for_city(city)
+    if request_chat_id is None or container.cash.router.city_by_request_chat(request_chat_id) != city:
+        raise DomainValidationError("Для города не настроен чат предстоящих сделок")
+    if payload.time and not container.cash.router.pick_schedule_chat_for_city(city):
+        raise DomainValidationError("Для города не настроен чат времени")
+    async with container.pool.acquire() as con:
+        client = await con.fetchrow(
+            "SELECT chat_id, name FROM clients WHERE id=$1 AND is_active=TRUE",
+            payload.clientId,
+        )
+    if client is None:
+        raise DomainValidationError("Активный клиент не найден")
+    chat_id = int(client["chat_id"])
+    source_message_id = int.from_bytes(
+        hashlib.blake2b(payload.idempotencyKey.encode(), digest_size=8).digest(), "big"
+    ) & ((1 << 63) - 1)
+    source_ref = f"{chat_id}:{source_message_id}"
+    async with _cash_creation_lock:
+        async with container.pool.acquire() as con:
+            existing_id = await con.fetchval(
+                """SELECT id FROM deals WHERE source='crm' AND source_kind='cash'
+                   AND source_ref=$1""",
+                source_ref,
+            )
+        if existing_id is not None:
+            existing = await service.get_deal(int(existing_id))
+            response = build_deal_details(existing)
+            entry = await container.operational_repositories.cash_requests.get_request_schedule_entry_by_req_id(
+                req_id=str(existing.body.get("req_id"))
+            )
+            response.requestChatPosted = bool(entry and entry.get("request_message_id"))
+            return response
+
+        async def sync_schedule(schedule_city: str) -> None:
+            await container.cash.schedule.sync_board(
+                messenger=container.messenger, city=schedule_city
+            )
+
+        use_case = CreateCashRequest(
+            repo=container.operational_repositories.cash_requests,
+            router_service=container.cash.router,
+            schedule_service=container.cash.schedule,
+            deal_registrar=container.crm.telegram_registrar,
+            calculator=container.cash.calculator,
+            card_presenter=container.cash.card_presenter,
+            card_parser=container.cash.card_parser,
+            schedule_coordinator=container.cash.schedule_coordinator,
+            metrics=container.metrics,
+        )
+        result = await use_case.execute_core(
+            CreateCashRequestParams(
+                chat_id=chat_id,
+                chat_name=str(client["name"]),
+                source_message_id=source_message_id,
+                parsed=ParsedRequest(
+                    cmd="crm",
+                    kind="dep" if payload.dealType is DealType.deposit else "wd",
+                    city=city,
+                    amount_expr=str(payload.amount),
+                    code=currency,
+                    contact1=payload.contact1 or "",
+                    contact2=payload.contact2 or "",
+                    comment=payload.comment or "",
+                ),
+                creator_name=user.display_name,
+                source="crm",
+                actor_user_id=user.id,
+                hhmm=payload.time,
+            ),
+            messenger=container.messenger,
+            replier=ClientChatReplier(container.messenger, chat_id),
+            sync_schedule_board=sync_schedule,
+        )
+        if not result.ok:
+            raise DomainStateError(result.error or "Не удалось создать кассовую заявку")
+        async with container.pool.acquire() as con:
+            deal_id = await con.fetchval(
+                """SELECT id FROM deals WHERE source='crm' AND source_kind='cash'
+                   AND source_ref=$1""",
+                source_ref,
+            )
+        if deal_id is None:
+            raise DomainStateError("Заявка отправлена, но сделка CRM не найдена")
+        response = build_deal_details(await service.get_deal(int(deal_id)))
         response.requestChatPosted = result.request_chat_posted
         return response
 

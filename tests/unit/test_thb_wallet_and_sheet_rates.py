@@ -98,6 +98,7 @@ async def test_cross_currency_trade_uses_current_main_rate_cells(
 def test_main_rate_cell_map_matches_current_sheet_layout() -> None:
     assert MAIN_RATE_CELL_MAP == {
         "EUR": "Главная!E2",
+        "EUR500": "Главная!E2",
         "USDT": "Главная!E9",
         "USD": "Главная!H9",
         "USDW": "Главная!H2",

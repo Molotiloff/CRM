@@ -11,11 +11,13 @@ CMD_MAP: dict[str, tuple[str, str]] = {
     "депд": ("dep", "USD"),
     "депе": ("dep", "EUR"),
     "депб": ("dep", "USDW"),
+    "депбат": ("dep", "THB"),
     "выдр": ("wd", "RUB"),
     "выдт": ("wd", "USDT"),
     "выдд": ("wd", "USD"),
     "выде": ("wd", "EUR"),
     "выдб": ("wd", "USDW"),
+    "выдбат": ("wd", "THB"),
 }
 
 FX_CMD_MAP: dict[str, tuple[str, str, str]] = {

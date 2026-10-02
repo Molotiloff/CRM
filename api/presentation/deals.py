@@ -97,7 +97,7 @@ def _deal_item(row: Deal) -> DealItemDto:
         dealType=_deal_type_label(str(row.deal_type)),
         asset=_deal_asset(str(row.deal_type), body),
         direction=_deal_direction(str(row.deal_type), body),
-        amountRub=_deal_amount_rub(str(row.deal_type), body),
+        amountRub=_deal_amount_rub(str(row.deal_type), body, status=status),
         transferAmount=(
             f"{body.get('amount')} {body.get('currency')}"
             if str(row.deal_type) == "client_transfer" else None
@@ -145,7 +145,20 @@ def _deal_asset(deal_type: str, body: Mapping[str, Any]) -> str:
     return "RUB"
 
 
-def _deal_amount_rub(deal_type: str, body: Mapping[str, Any]) -> float:
+def _deal_amount_rub(
+    deal_type: str,
+    body: Mapping[str, Any],
+    *,
+    status: DealStatus,
+) -> float:
+    if (
+        deal_type in {"deposit", "withdrawal"}
+        and status is DealStatus.done
+        and str(body.get("currency") or "").upper() == "RUB"
+    ):
+        settled_qty = _body_decimal(body, "settled_qty")
+        if settled_qty is not None:
+            return float_value(settled_qty)
     if deal_type in {"sale", "purchase"}:
         for prefix in ("recv", "pay"):
             if _is_rub(body.get(f"{prefix}_code")):

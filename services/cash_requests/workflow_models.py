@@ -43,3 +43,4 @@ class CashRequestResult:
     request_text: str | None = None
     schedule_line: str | None = None
     removed_from_schedule: bool = False
+    request_chat_posted: bool = False

@@ -1,3 +1,4 @@
+from .client_chat_replier import ClientChatReplier
 from .collecting_replier import CollectingReplier
 from .deferred import DeferredMessenger
 from .ports import (
@@ -9,6 +10,7 @@ from .ports import (
 )
 
 __all__ = [
+    "ClientChatReplier",
     "CollectingReplier",
     "DeferredMessenger",
     "MessengerError",

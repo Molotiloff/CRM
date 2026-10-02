@@ -53,6 +53,10 @@ class CashDealData:
     request_text: str | None = None
     client_chat_id: int | None = None
     client_message_id: int | None = None
+    source: str = "tg_bot"
+    actor_user_id: int | None = None
+    contact1: str = ""
+    contact2: str = ""
 
 
 class TelegramDealRegistrarPort(Protocol):
@@ -114,6 +118,8 @@ class TelegramDealRegistrar:
             "telegram_request_text": data.request_text,
             "telegram_client_chat_id": data.client_chat_id,
             "telegram_client_message_id": data.client_message_id,
+            "contact1": data.contact1,
+            "contact2": data.contact2,
         }
         if data.kind in {"dep", "wd"}:
             body.update({"currency": data.code, "amount": str(data.amount)})
@@ -130,9 +136,9 @@ class TelegramDealRegistrar:
             DealCreateCommand(
                 deal_type=deal_type,
                 city=data.city,
-                actor_user_id=None,
+                actor_user_id=data.actor_user_id,
                 client_id=data.client_id,
-                source="tg_bot",
+                source=data.source,
                 source_kind="cash",
                 source_ref=data.source_ref,
                 comment=data.comment,

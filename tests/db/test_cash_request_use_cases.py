@@ -144,6 +144,28 @@ class TestCreateCashCore:
         assert deals[0].source_kind == "cash"
         assert deals[0].body.get("amount") == "1000"
 
+    async def test_crm_cash_request_sets_time_in_city_card_and_schedule(
+        self, pool, cash_request_repo, request_schedule_repo, client_id
+    ) -> None:
+        uc = _create_uc(cash_request_repo, request_schedule_repo, pool=pool, with_crm=True)
+        messenger = FakeMessenger()
+        result = await uc.execute_core(
+            _dep_params(source="crm", source_message_id=904, hhmm="16:30"),
+            messenger=messenger,
+            replier=CollectingReplier(),
+        )
+
+        assert result.ok and result.request_chat_posted
+        assert "Время: <code>16:30</code>" in messenger.sent_to(REQUEST_CHAT)[0].text
+        entry = await request_schedule_repo.get_request_schedule_entry_by_req_id(
+            req_id=result.req_id
+        )
+        assert entry["hhmm"] == "16:30"
+        deals = await DealRepository(pool).list_deals(DealListFilter(client_id=client_id))
+        assert len(deals) == 1
+        assert deals[0].source == "crm"
+        assert deals[0].source_kind == "cash"
+
     async def test_balance_neutral_request_marks_chat_as_internal_wallet(
         self, pool, cash_request_repo, request_schedule_repo, client_id
     ) -> None:

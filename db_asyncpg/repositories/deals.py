@@ -259,10 +259,14 @@ class DealRepository(ConnectionBoundRepo):
             async with con.transaction():
                 updated = await con.fetchrow(
                     f"UPDATE deals SET {', '.join(assignments)} "
-                    f"WHERE id = ${len(values)} RETURNING id, source, status",
+                    f"WHERE id = ${len(values)} RETURNING id, source, source_kind, status",
                     *values,
                 )
-                if updated is not None and updated["source"] == "tg_bot":
+                if updated is not None and (
+                    updated["source"] == "tg_bot" or (
+                        updated["source"] == "crm" and updated["source_kind"] == "cash"
+                    )
+                ):
                     await con.execute(
                         """
                         INSERT INTO tg_outbox (kind, payload)
@@ -348,7 +352,7 @@ class DealRepository(ConnectionBoundRepo):
                         json.dumps(payload),
                     )
                     if row["source"] == "tg_bot" or (
-                        row["source"] == "crm" and row["source_kind"] == "exchange"
+                        row["source"] == "crm" and row["source_kind"] in {"exchange", "cash"}
                     ):
                         outbox_payload = {
                             "dealId": deal_id,

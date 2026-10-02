@@ -7,6 +7,7 @@ from decimal import Decimal
 from observability import bind_log_context, logged_operation, measured_operation
 from services.cash_requests.audit import RequestAudit, audit_lines_for_request_chat
 from services.cash_requests.calculator import CashRequestCalculationError
+from services.cash_requests.card_text_parser import upsert_time_line
 from services.cash_requests.parsing import ParsedRequest
 from services.cash_requests.request_use_case_base import (
     CashRequestUseCaseBase,
@@ -26,6 +27,9 @@ class CreateCashRequestParams(CashRequestCommand):
     creator_name: str = "unknown"
     source_message_id: int | None = None
     client_group: str | None = None
+    source: str = "tg_bot"
+    actor_user_id: int | None = None
+    hhmm: str | None = None
 
 
 CreateCashRequestResult = CashRequestResult
@@ -74,7 +78,7 @@ class CreateCashRequest(CashRequestUseCaseBase):
             changed=False,
         )
         text_client = plan.client_text
-        text_city = plan.request_text
+        text_city = upsert_time_line(plan.request_text, params.hhmm) if params.hhmm else plan.request_text
         city_markup = plan.request_markup
         schedule_line = plan.schedule_line
 
@@ -101,6 +105,7 @@ class CreateCashRequest(CashRequestUseCaseBase):
                     client_name=ctx.chat_name,
                     request_chat_id=sent_city.chat_id,
                     request_message_id=sent_city.message_id,
+                    hhmm=params.hhmm,
                     sync_schedule_board=sync_schedule_board,
                 )
 
@@ -135,9 +140,17 @@ class CreateCashRequest(CashRequestUseCaseBase):
                         request_text=text_city,
                         client_chat_id=(sent_client.chat_id if sent_client else params.chat_id),
                         client_message_id=(sent_client.message_id if sent_client else None),
+                        source=params.source,
+                        actor_user_id=params.actor_user_id,
+                        contact1=parsed.contact1,
+                        contact2=parsed.contact2,
                     )
                 )
             except Exception:
                 log.exception("Failed to mirror cash request %s to CRM", req_id)
 
-        return CreateCashRequestResult(ok=True, req_id=req_id)
+        return CreateCashRequestResult(
+            ok=True,
+            req_id=req_id,
+            request_chat_posted=sent_city is not None,
+        )

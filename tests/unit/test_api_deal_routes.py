@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from api.dependencies import get_current_user
 from api.exception_handlers import register_exception_handlers
 from api.models import ApiUser, UserRole
-from api.presentation.deals import build_deal_details
+from api.presentation.deals import build_deal_details, build_deals_page
 from api.routers import deals
 from api.schemas.common import ErrorResponse
 from api.schemas.deals import DealDetailsResponse, DealsPageResponse
@@ -124,6 +124,38 @@ def test_best_change_details_are_explicit_and_include_correction_link() -> None:
     assert details.bestChange.clientRateRub == 87.5
     assert details.bestChange.originalDealId == "17"
     assert details.bestChange.correctionReason == "Исправлен курс"
+
+
+def test_completed_cash_deal_uses_settled_rub_amount_in_list_and_details() -> None:
+    now = datetime.now(UTC)
+
+    def cash_deal(status: str, deal_type: str = "deposit") -> Deal:
+        return Deal.from_record(
+            {
+                "id": 19,
+                "deal_no": 103409,
+                "deal_type": deal_type,
+                "city": "екб",
+                "status": status,
+                "source": "crm",
+                "source_kind": "cash",
+                "created_by_name": "Manager",
+                "created_at": now,
+                "updated_at": now,
+                "body": {
+                    "currency": "RUB",
+                    "amount": "10000.00",
+                    "settled_qty": "1000.00",
+                },
+            }
+        )
+
+    for deal_type in ("deposit", "withdrawal"):
+        completed = cash_deal("done", deal_type)
+        assert build_deal_details(completed).deal.amountRub == 1000
+        assert build_deals_page([completed]).deals[0].amountRub == 1000
+        assert build_deal_details(completed).body["amount"] == "10000.00"
+    assert build_deal_details(cash_deal("new")).deal.amountRub == 10000
 
 
 def test_deal_write_route_rejects_cashier() -> None:

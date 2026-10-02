@@ -72,7 +72,6 @@ from services.client_balances import (
     ScheduledBalancesReportService,
 )
 from services.daily_balances_scheduler import setup_daily_balances_scheduler
-from services.exchange import AcceptShortService
 from services.message_archive import (
     ArchiveRuntimeMetrics,
     LocalMediaStorage,
@@ -108,7 +107,6 @@ from services.xe_api import ConverterAPIService
 from telegram_adapters import (
     AiogramBroadcastPresenter,
     AiogramBroadcastSessionStore,
-    AiogramExchangeKeyboardPresenter,
     AiogramOrderbookLiveMessageEditor,
     AiogramPaymentWatchNotifier,
     AiogramPaymentWatchPresenter,
@@ -391,25 +389,9 @@ def setup_handlers(
         dp.message.outer_middleware(silent_accounting_middleware)
         dp.callback_query.outer_middleware(silent_accounting_middleware)
 
-    accept_short_service = AcceptShortService(
-        repositories.exchange_commands,
-        request_chat_id=request_chat_id,
-        act_counter_service=act_counter_service,
-        deal_registrar=container.crm.telegram_registrar,
-        unit_of_work_factory=container.exchange.unit_of_work_factory,
-        balance_service=container.exchange.balance,
-        calculator=container.exchange.calculator,
-        text_builder=container.exchange.text_builder,
-        transaction_service=container.exchange.transaction,
-        source_links=container.exchange.source_links,
-        notification_builder=container.exchange.notifications,
-        wallet_presenter=container.exchange.wallet_presenter,
-        keyboards=AiogramExchangeKeyboardPresenter(),
-        metrics=container.metrics,
-    )
     accept_short_handler = AcceptShortHandler(
         manager_repo,
-        accept_short_service,
+        container.exchange.accept_short,
         admin_chat_ids=admin_chat_list,
         admin_user_ids=admin_user_list,
         ignore_chat_ids=None,

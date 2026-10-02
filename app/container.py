@@ -90,6 +90,7 @@ from services.crm.deal_source_mutation import DealSourceMutationService
 from services.crm.deal_status_policy import DealStatusPolicy
 from services.crm.exchange_deal_source_adapter import ExchangeDealSourceAdapter
 from services.crm.telegram_deal_registrar import TelegramDealRegistrar
+from services.exchange.accept_short_service import AcceptShortService
 from services.exchange.balance_service import ExchangeBalanceService
 from services.exchange.calculator import ExchangeCalculator
 from services.exchange.notification_builder import ExchangeNotificationBuilder
@@ -102,7 +103,7 @@ from services.messaging import DeferredMessenger, MessengerPort
 from services.payment_watch.settlement_service import DealSettlementService
 from services.request_table import AsyncSheetsTradeGateway
 from services.unit_of_work import UnitOfWorkFactory, UnitOfWorkPort
-from telegram_adapters import AiogramCashKeyboardPresenter
+from telegram_adapters import AiogramCashKeyboardPresenter, AiogramExchangeKeyboardPresenter
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,6 +198,7 @@ class CashServices:
 
 @dataclass(frozen=True, slots=True)
 class ExchangeServices:
+    accept_short: AcceptShortService
     unit_of_work_factory: UnitOfWorkFactory
     balance: ExchangeBalanceService
     calculator: ExchangeCalculator
@@ -354,20 +356,44 @@ class ApplicationContainer:
                 request_chat_ids=frozenset(request_chat_ids),
             ),
         )
+        exchange_calculator = ExchangeCalculator()
+        exchange_text_builder = ExchangeTextBuilder()
+        exchange_transaction = ExchangeTransactionService(
+            unit_of_work_factory=unit_of_work_factory,
+            balance_service=exchange_balance,
+            deal_service=deal_service,
+        )
+        exchange_source_links = ExchangeSourceLinkService(operational.exchange_requests)
+        exchange_notifications = ExchangeNotificationBuilder()
+        exchange_wallet_presenter = ExchangeWalletPresenter()
+        exchange_act_counter = ActCounterService(operational.act_counter_ledger)
+        accept_short = AcceptShortService(
+            operational.exchange_commands,
+            request_chat_id=config.request_chat_id,
+            act_counter_service=exchange_act_counter,
+            deal_registrar=telegram_registrar,
+            unit_of_work_factory=unit_of_work_factory,
+            balance_service=exchange_balance,
+            calculator=exchange_calculator,
+            text_builder=exchange_text_builder,
+            transaction_service=exchange_transaction,
+            source_links=exchange_source_links,
+            notification_builder=exchange_notifications,
+            wallet_presenter=exchange_wallet_presenter,
+            keyboards=AiogramExchangeKeyboardPresenter(),
+            metrics=metrics,
+        )
         exchange = ExchangeServices(
+            accept_short=accept_short,
             unit_of_work_factory=unit_of_work_factory,
             balance=exchange_balance,
-            calculator=ExchangeCalculator(),
-            text_builder=ExchangeTextBuilder(),
-            transaction=ExchangeTransactionService(
-                unit_of_work_factory=unit_of_work_factory,
-                balance_service=exchange_balance,
-                deal_service=deal_service,
-            ),
-            source_links=ExchangeSourceLinkService(operational.exchange_requests),
-            notifications=ExchangeNotificationBuilder(),
-            wallet_presenter=ExchangeWalletPresenter(),
-            act_counter=ActCounterService(operational.act_counter_ledger),
+            calculator=exchange_calculator,
+            text_builder=exchange_text_builder,
+            transaction=exchange_transaction,
+            source_links=exchange_source_links,
+            notifications=exchange_notifications,
+            wallet_presenter=exchange_wallet_presenter,
+            act_counter=exchange_act_counter,
         )
         cash_source_edit = EditCashRequest(
             repo=operational.cash_requests,

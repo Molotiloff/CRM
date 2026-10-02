@@ -335,6 +335,24 @@ async def test_cash_edit_and_cancel_use_schedule_inside_unit_of_work() -> None:
     assert canceled.status == "canceled"
 
 
+async def test_crm_cash_edit_and_cancel_use_same_source_adapter() -> None:
+    deals = FakeDeals(source_kind="cash")
+    deals.row["source"] = "crm"
+    service, factory, _ = _service(deals)
+
+    await service.edit_cash(
+        7,
+        CashSourceEdit(city="екб", amount=Decimal("1500")),
+        actor_name="Manager",
+    )
+    canceled = await service.cancel(7, actor_user_id=3)
+
+    assert factory.created[0].committed is True
+    assert "Время: <code>10:00</code>" in deals.row["body"]["telegram_request_text"]
+    assert factory.created[1].request_schedule.deactivated == "Б-123456"
+    assert canceled.status == "canceled"
+
+
 async def test_cash_exchange_edit_uses_typed_currencies_and_amounts() -> None:
     deals = FakeDeals(source_kind="cash", cash_kind=CashRequestKind.EXCHANGE)
     service, factory, _ = _service(deals, cash_kind=CashRequestKind.EXCHANGE)

@@ -509,6 +509,7 @@ def test_remaining_service_packages_expose_only_consumed_entry_points() -> None:
         "AsyncSheetsTradeGateway"
     }
     assert _package_exports(SERVICES_ROOT / "messaging" / "__init__.py") == {
+        "ClientChatReplier",
         "CollectingReplier",
         "DeferredMessenger",
         "MessengerError",

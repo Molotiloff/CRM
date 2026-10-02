@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from db_asyncpg.ports.workflows import ExchangeCommandRepositoryPort
@@ -12,7 +12,11 @@ from services.exchange.balance_service import ExchangeBalanceService
 from services.exchange.calculator import ExchangeCalculator
 from services.exchange.cancel_exchange_request import CancelExchangeRequest
 from services.exchange.card_parser import extract_created_by, extract_request_id
-from services.exchange.create_exchange_request import CreateExchangeParams, CreateExchangeRequest
+from services.exchange.create_exchange_request import (
+    CreateExchangeParams,
+    CreateExchangeRequest,
+    CreateExchangeResult,
+)
 from services.exchange.edit_exchange_request import EditExchangeParams, EditExchangeRequest
 from services.exchange.keyboard_port import ExchangeKeyboardPort
 from services.exchange.notification_builder import ExchangeNotificationBuilder
@@ -143,6 +147,25 @@ class AcceptShortService:
 
     def is_request_chat_origin(self, chat_id: int) -> bool:
         return bool(self.request_chat_id and int(chat_id) == int(self.request_chat_id))
+
+    async def create_request(
+        self,
+        params: CreateExchangeParams,
+        *,
+        messenger: MessengerPort,
+        replier: ReplierPort,
+    ) -> CreateExchangeResult:
+        """Apply the same client/request-chat ledger policy for Telegram and CRM."""
+        is_request_origin = self.is_request_chat_origin(params.chat_id)
+        return await self.create_exchange_request.execute_core(
+            replace(
+                params,
+                recv_is_deposit=is_request_origin,
+                pay_is_withdraw=is_request_origin,
+            ),
+            messenger=messenger,
+            replier=replier,
+        )
 
     @classmethod
     def help_text(cls) -> str:
@@ -287,7 +310,7 @@ class AcceptShortService:
         if handled:
             return
 
-        await self.create_exchange_request.execute_core(
+        await self.create_request(
             CreateExchangeParams(
                 chat_id=command.chat_id,
                 chat_name=command.chat_name,
@@ -297,8 +320,6 @@ class AcceptShortService:
                 pay_code=parsed.pay_code,
                 pay_amount_expr=parsed.pay_amount_expr,
                 creator_name=command.actor_name,
-                recv_is_deposit=recv_is_deposit,
-                pay_is_withdraw=pay_is_withdraw,
                 note=parsed.user_note,
                 reply_to_message_id=command.message_id,
             ),

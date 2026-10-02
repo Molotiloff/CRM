@@ -52,9 +52,10 @@ class DealSourceMutationService:
         if DealStatus.CANCELED not in DealStatusPolicy.allowed_transitions(deal):
             raise DealValidationError(f"Deal in status {deal.status} cannot be canceled")
         if deal.source is not DealSource.TELEGRAM and not (
-            deal.source is DealSource.CRM and deal.source_kind is SourceKind.EXCHANGE
+            deal.source is DealSource.CRM
+            and deal.source_kind in {SourceKind.EXCHANGE, SourceKind.CASH}
         ):
-            raise DealValidationError("Only Telegram-backed or CRM exchange deals can be canceled")
+            raise DealValidationError("Only Telegram-backed or CRM source deals can be canceled")
         adapter = self._adapters.require(deal.source_kind)
         payload = {"comment": comment} if comment else {}
 
@@ -140,7 +141,10 @@ class DealSourceMutationService:
 
     async def _editable_deal(self, deal_id: int, source_kind: SourceKind) -> Deal:
         deal = await self._deals.get_deal(deal_id)
-        self._require_tg_source(deal)
+        if deal.source is not DealSource.TELEGRAM and not (
+            deal.source is DealSource.CRM and deal.source_kind is SourceKind.CASH
+        ):
+            raise DealValidationError("Only Telegram-backed or CRM cash deals can be edited")
         if deal.source_kind is not source_kind:
             raise DealValidationError(f"Deal is not a {source_kind} Telegram request")
         if deal.is_terminal:

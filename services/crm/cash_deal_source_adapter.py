@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from domain import CashDealBody, CashRequestKind, Deal, ScheduleEntry, SourceKind
+from services.cash_requests.card_text_parser import upsert_time_line
 from services.cash_requests.edit_cash_request import EditCashRequest, EditCashRequestParams
 from services.cash_requests.parsing import ParsedRequest
 from services.messaging import CollectingReplier
@@ -71,12 +72,15 @@ class CashDealSourceAdapter:
         if not prepared.ok:
             raise DealValidationError(prepared.error or "Cash request edit failed")
 
+        request_text = prepared.request_text
+        if request_text is not None and entry.hhmm:
+            request_text = upsert_time_line(request_text, entry.hhmm)
         updated_body = _updated_body(
             body,
             command,
             kind=entry.kind,
             client_text=prepared.client_text,
-            request_text=prepared.request_text,
+            request_text=request_text,
         )
         return CashDealSourceEditPlan(
             entry=entry,
@@ -180,7 +184,7 @@ def _updated_body(
             client_text=client_text,
             request_text=request_text,
             note=command.comment,
-        )
+        ).merged({"contact1": command.contact1, "contact2": command.contact2})
     if command.in_amount is None or command.out_amount is None:
         raise DealValidationError("Cash FX amounts are required")
     return body.with_exchange_amounts(
@@ -189,4 +193,4 @@ def _updated_body(
         client_text=client_text,
         request_text=request_text,
         note=command.comment,
-    )
+    ).merged({"contact1": command.contact1, "contact2": command.contact2})

@@ -18,6 +18,7 @@ from db_asyncpg.repositories.tg_outbox import TgOutboxRepository
 from db_asyncpg.uow import AsyncpgUnitOfWork
 from services.crm import DealEventBus, DealListFilter, DealService, TelegramDealRegistrar
 from services.crm.deal_service import DealStatusCommand
+from services.exchange.accept_short_service import AcceptShortService
 from services.exchange.balance_service import ExchangeBalanceService
 from services.exchange.calculator import ExchangeCalculator
 from services.exchange.cancel_exchange_request import CancelExchangeParams, CancelExchangeRequest
@@ -25,7 +26,7 @@ from services.exchange.create_exchange_request import CreateExchangeParams, Crea
 from services.exchange.edit_exchange_request import EditExchangeParams, EditExchangeRequest
 from services.exchange.source_link_service import ExchangeSourceLinkService
 from services.exchange.text_builder import ExchangeTextBuilder
-from services.messaging import CollectingReplier
+from services.messaging import ClientChatReplier, CollectingReplier
 from tests.db.conftest import balance_of
 from tests.fakes import FakeExchangeKeyboardPresenter, FakeMessenger
 
@@ -409,12 +410,12 @@ class TestCancelCore:
         cancel_in_request_chat: bool,
     ) -> None:
         await repo.add_currency(client_id, "EUR", 2)
-        create_uc = CreateExchangeRequest(
+        accept_short = AcceptShortService(
             **_common_deps(cash_request_repo, pool, exchange_requests_repo),
             deal_registrar=_deal_registrar(pool),
         )
         created_messages = FakeMessenger()
-        created = await create_uc.execute_core(
+        created = await accept_short.create_request(
             _create_params(
                 source="crm",
                 recv_code="RUB",
@@ -423,11 +424,12 @@ class TestCancelCore:
                 pay_amount_expr="1",
             ),
             messenger=created_messages,
-            replier=CollectingReplier(),
+            replier=ClientChatReplier(created_messages, CLIENT_CHAT),
         )
         assert created.ok and created.req_id
-        assert await balance_of(repo, client_id, "RUB") == Decimal("1.00")
-        assert await balance_of(repo, client_id, "EUR") == Decimal("-1.00")
+        assert await balance_of(repo, client_id, "RUB") == Decimal("-1.00")
+        assert await balance_of(repo, client_id, "EUR") == Decimal("1.00")
+        assert "Средств у" in created_messages.sent_to(CLIENT_CHAT)[1].text
 
         card_chat = REQUEST_CHAT if cancel_in_request_chat else CLIENT_CHAT
         card = created_messages.sent_to(card_chat)[0]

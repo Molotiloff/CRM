@@ -85,6 +85,34 @@ class ExchangeDealCreateRequest(BaseModel):
         return self
 
 
+class CashDealCreateRequest(BaseModel):
+    dealType: DealType
+    clientId: int = Field(gt=0)
+    city: str = Field(min_length=1, max_length=64)
+    currency: str = Field(min_length=1, max_length=12)
+    amount: Decimal = Field(gt=0)
+    idempotencyKey: str = Field(min_length=1, max_length=120)
+    comment: str | None = None
+    time: str | None = None
+    contact1: str | None = None
+    contact2: str | None = None
+
+    @model_validator(mode="after")
+    def validate_cash(self) -> CashDealCreateRequest:
+        if self.dealType not in {DealType.deposit, DealType.withdrawal}:
+            raise ValueError("Only deposit and withdrawal are supported")
+        if not self.amount.is_finite():
+            raise ValueError("Amount must be finite")
+        if self.time:
+            from services.cash_requests.request_time_service import RequestTimeService
+
+            normalized = RequestTimeService.parse_time(f"/время {self.time.strip()}")
+            if normalized is None:
+                raise ValueError("Время укажите в формате ЧЧ:ММ")
+            self.time = normalized
+        return self
+
+
 class DealFormClientDto(BaseModel):
     id: str
     name: str
