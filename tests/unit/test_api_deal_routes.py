@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -17,6 +19,7 @@ from domain import Deal, DomainStateError, SettlementReviewStatus
 from domain.accounting_flows import SettlementResolution
 from services.crm.deal_service import DealNotFoundError
 from services.payment_watch.settlement_models import SettlementResult
+from tests.fakes import FakeMessenger
 
 
 def test_deal_routes_expose_list_create_update_and_status() -> None:
@@ -75,6 +78,35 @@ def test_deal_detail_route_returns_success_and_not_found_contracts() -> None:
     assert missing.status_code == 404
     error = ErrorResponse.model_validate(missing.json())
     assert error.detail == "Deal 404 was not found"
+
+
+def test_crm_transfer_route_uses_shared_receipt_workflow() -> None:
+    app = _app(FakeDealService())
+    transfer = AsyncMock(return_value=SimpleNamespace(deal_id=1))
+    app.state.container = SimpleNamespace(
+        messenger=FakeMessenger(),
+        crm=SimpleNamespace(client_transfer_workflow=SimpleNamespace(transfer=transfer)),
+    )
+
+    response = TestClient(app).post(
+        "/api/v1/deals/client-transfers",
+        json={
+            "fromClientId": 11,
+            "toClientId": 12,
+            "amount": "25",
+            "currency": "RUB",
+            "idempotencyKey": "crm-transfer-key",
+            "allowNegative": True,
+        },
+    )
+
+    assert response.status_code == 201
+    transfer.assert_awaited_once()
+    command = transfer.await_args.args[0]
+    assert command.source == "crm"
+    assert command.from_client_id == 11
+    assert command.to_client_id == 12
+    assert command.allow_negative is True
 
 
 def test_best_change_details_are_explicit_and_include_correction_link() -> None:

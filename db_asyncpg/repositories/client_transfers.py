@@ -165,6 +165,7 @@ class ClientTransferRepository:
                 result = ClientTransferResult(
                     deal_id=int(deal_id),
                     from_client_name=sender["name"],
+                    from_chat_id=int(sender["chat_id"]),
                     to_client_name=recipient["name"],
                     to_chat_id=int(recipient["chat_id"]),
                     from_balance=from_balance,
@@ -257,7 +258,11 @@ class ClientTransferRepository:
                        FROM deals WHERE id=$1 FOR UPDATE""",
                     command.deal_id,
                 )
-                if deal is None or deal["source"] != "tg_bot" or deal["source_kind"] != "client_transfer":
+                if (
+                    deal is None
+                    or deal["source"] not in {"tg_bot", "crm"}
+                    or deal["source_kind"] != "client_transfer"
+                ):
                     raise DomainValidationError("Чек перевода не найден")
                 body = deal["body"]
                 if isinstance(body, str):
@@ -474,6 +479,9 @@ class ClientTransferRepository:
         return ClientTransferResult(
             deal_id=int(existing["id"]),
             from_client_name=body["from_client_name"],
+            from_chat_id=int(await connection.fetchval(
+                "SELECT chat_id FROM clients WHERE id=$1", body["from_client_id"]
+            )),
             to_client_name=body["to_client_name"],
             to_chat_id=int(await connection.fetchval(
                 "SELECT chat_id FROM clients WHERE id=$1", body["to_client_id"]

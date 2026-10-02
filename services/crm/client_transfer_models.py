@@ -26,6 +26,7 @@ class ClientTransferCommand:
 class ClientTransferResult:
     deal_id: int
     from_client_name: str
+    from_chat_id: int
     to_client_name: str
     to_chat_id: int
     from_balance: Decimal

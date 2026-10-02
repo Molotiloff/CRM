@@ -12,7 +12,9 @@ from services.crm.client_transfer_service import (
     ClientTransferCommand,
     ClientTransferService,
 )
+from services.crm.client_transfer_workflow import ClientTransferWorkflow
 from services.crm.deal_events import DealEventBus
+from tests.fakes import FakeMessenger
 
 
 async def _clients(pool, *, duplicate_name: bool = False) -> tuple[int, int]:
@@ -83,6 +85,45 @@ async def test_client_transfer_posts_both_legs_and_deal_once(pool) -> None:
         "deal_type": "client_transfer", "status": "done",
         "source_kind": "client_transfer", "client_id": sender,
     }
+
+
+@pytest.mark.asyncio
+async def test_crm_transfer_uses_telegram_flow_and_can_be_corrected_from_receipt(pool) -> None:
+    sender, recipient = await _clients(pool)
+    service = ClientTransferService(ClientTransferRepository(pool), DealEventBus())
+    messenger = FakeMessenger()
+    workflow = ClientTransferWorkflow(service, messenger)
+    command = ClientTransferCommand(
+        from_client_id=sender,
+        to_client_id=recipient,
+        amount=Decimal("25"),
+        currency="RUB",
+        source="crm",
+        source_ref="crm-transfer-1",
+        city="внутренний",
+    )
+
+    result = await workflow.transfer(command)
+
+    assert result.from_chat_id == -700001
+    assert result.to_chat_id == -700002
+    assert [item.text for item in messenger.sent_to(-700001)] == [
+        f"Перевод #{result.deal_id}",
+        f"Перевод #{result.deal_id} проведён.\nПолучатель: Получатель\n"
+        "Списано: 25.00 RUB\nБаланс: 75.00 RUB",
+    ]
+    assert len(messenger.sent_to(-700002)) == 2
+
+    corrected = await service.adjust(ClientTransferAdjustmentCommand(
+        deal_id=result.deal_id,
+        from_chat_id=-700001,
+        source_ref="-700001:adjust-crm-1",
+        new_amount=Decimal("20"),
+    ))
+
+    assert corrected.new_amount == Decimal("20")
+    assert corrected.from_balance == Decimal("80")
+    assert corrected.to_balance == Decimal("20")
 
 
 @pytest.mark.asyncio

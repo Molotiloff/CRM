@@ -32,7 +32,7 @@ from domain import DomainStateError, DomainValidationError
 from domain.accounting_flows import SettlementResolution as DomainSettlementResolution
 from services.cash_requests.create_cash_request import CreateCashRequest, CreateCashRequestParams
 from services.cash_requests.parsing import ParsedRequest
-from services.crm.client_transfer_service import ClientTransferCommand, ClientTransferService
+from services.crm.client_transfer_service import ClientTransferCommand
 from services.crm.deal_service import (
     DealCreateCommand,
     DealListFilter,
@@ -62,10 +62,6 @@ _cash_creation_lock = asyncio.Lock()
 
 def get_deal_service(request: Request) -> DealService:
     return request.app.state.deal_service
-
-
-def get_client_transfer_service(request: Request) -> ClientTransferService:
-    return request.app.state.client_transfer_service
 
 
 @router.get(
@@ -191,11 +187,14 @@ async def create_deal(
 )
 async def create_client_transfer(
     payload: ClientTransferCreateRequest,
+    request: Request,
     user: ApiUser = Depends(require_role(UserRole.manager)),
-    transfer_service: ClientTransferService = Depends(get_client_transfer_service),
     deal_service: DealService = Depends(get_deal_service),
 ) -> DealDetailsResponse:
-    result = await transfer_service.transfer(
+    container = request.app.state.container
+    if isinstance(container.messenger, DeferredMessenger):
+        raise DomainStateError("Отправка чеков в Telegram сейчас недоступна")
+    result = await container.crm.client_transfer_workflow.transfer(
         ClientTransferCommand(
             from_client_id=payload.fromClientId,
             to_client_id=payload.toClientId,

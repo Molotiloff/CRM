@@ -377,6 +377,7 @@ def setup_handlers(
         city_cash_chats=city_cash_chats,
         cash_settlement_service=container.accounting.cash_settlements,
         client_transfer_service=container.crm.client_transfers,
+        client_transfer_workflow=container.crm.client_transfer_workflow,
         client_closure_repo=ClientClosureRepo(container.pool),
         default_city=config.default_city,
     )

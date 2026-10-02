@@ -83,6 +83,7 @@ from services.cash_requests.request_schedule_service import RequestScheduleServi
 from services.cash_requests.schedule_coordinator import CashScheduleCoordinator
 from services.crm.cash_deal_source_adapter import CashDealSourceAdapter
 from services.crm.client_transfer_service import ClientTransferService
+from services.crm.client_transfer_workflow import ClientTransferWorkflow
 from services.crm.deal_events import DealEventBus
 from services.crm.deal_service import DealService
 from services.crm.deal_source_adapter import DealSourceAdapterRegistry
@@ -176,6 +177,7 @@ class CrmServices:
     telegram_registrar: TelegramDealRegistrar
     source_mutation: DealSourceMutationService
     client_transfers: ClientTransferService
+    client_transfer_workflow: ClientTransferWorkflow
 
 
 @dataclass(frozen=True, slots=True)
@@ -439,6 +441,7 @@ class ApplicationContainer:
                 comparison_repository=ShadowComparisonsRepo(pool),
             ),
         )
+        client_transfers = ClientTransferService(ClientTransferRepository(pool), event_bus)
         return cls(
             config=config,
             pool=pool,
@@ -449,8 +452,9 @@ class ApplicationContainer:
                 deals=deal_service,
                 telegram_registrar=telegram_registrar,
                 source_mutation=source_mutation,
-                client_transfers=ClientTransferService(
-                    ClientTransferRepository(pool), event_bus
+                client_transfers=client_transfers,
+                client_transfer_workflow=ClientTransferWorkflow(
+                    client_transfers, transport_messenger
                 ),
             ),
             api_queries=api_queries,

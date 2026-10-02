@@ -28,9 +28,9 @@ from services.crm.client_transfer_service import (
     ClientTransferAdjustmentCommand,
     ClientTransferAdjustmentResult,
     ClientTransferCommand,
-    ClientTransferResult,
     ClientTransferService,
 )
+from services.crm.client_transfer_workflow import ClientTransferWorkflow
 from services.number_formatting import format_amount_core
 from services.receipts import ReceiptImageBuilder, ReceiptRow
 from services.receipts.image import format_receipt_datetime
@@ -74,6 +74,7 @@ class WalletsHandler:
         city_cash_chats: Mapping[str, int] | None = None,
         cash_settlement_service: CashSettlementService | None = None,
         client_transfer_service: ClientTransferService | None = None,
+        client_transfer_workflow: ClientTransferWorkflow | None = None,
         client_closure_repo: ClientClosureRepo | None = None,
         default_city: str = "екб",
     ) -> None:
@@ -86,6 +87,7 @@ class WalletsHandler:
         self.city_cash_chat_ids = set(self.city_cash_chats.values())
         self.cash_settlement_service = cash_settlement_service
         self.client_transfer_service = client_transfer_service
+        self.client_transfer_workflow = client_transfer_workflow
         self.client_closure_repo = client_closure_repo
         self.receipt_builder = ReceiptImageBuilder()
         self.default_city = default_city
@@ -417,9 +419,9 @@ class WalletsHandler:
         allow_negative: bool = False,
         actor_tg_user_id: int | None = None,
     ) -> None:
-        assert self.client_transfer_service is not None
+        assert self.client_transfer_workflow is not None
         try:
-            result = await self.client_transfer_service.transfer(
+            await self.client_transfer_workflow.transfer(
                 ClientTransferCommand(
                     amount=amount,
                     currency=currency,
@@ -430,7 +432,8 @@ class WalletsHandler:
                     to_client_id=recipient_id,
                     allow_negative=allow_negative,
                     actor_tg_user_id=actor_tg_user_id,
-                )
+                ),
+                reply_to_message_id=message.message_id,
             )
         except DomainStateError as exc:
             if "Недостаточно средств" not in str(exc) or allow_negative:
@@ -460,60 +463,6 @@ class WalletsHandler:
         except DomainValidationError as exc:
             await message.answer(str(exc))
             return
-        await self._report_client_transfer(message, result)
-
-    async def _report_client_transfer(
-        self, message: Message, result: ClientTransferResult
-    ) -> None:
-        suffix = " (повтор)" if result.repeated else ""
-        if not result.repeated and message.bot is not None:
-            try:
-                receipt = self.receipt_builder.build(
-                    amount=result.amount,
-                    currency=result.currency,
-                    precision=result.precision,
-                    rows=(
-                        ReceiptRow("Статус", "Проведено", accent=True),
-                        ReceiptRow("Номер операции", f"#{result.deal_id}"),
-                        ReceiptRow("Отправитель", result.from_client_name),
-                        ReceiptRow("Получатель", result.to_client_name),
-                        ReceiptRow("Дата и время", format_receipt_datetime(result.created_at)),
-                    ),
-                )
-            except Exception:
-                log.exception("Failed to build client transfer receipt deal_id=%s", result.deal_id)
-            else:
-                for chat_id in (message.chat.id, result.to_chat_id):
-                    try:
-                        await message.bot.send_photo(
-                            chat_id,
-                            BufferedInputFile(receipt, filename=f"client_transfer_{result.deal_id}.png"),
-                            caption=f"Перевод #{result.deal_id}",
-                        )
-                    except Exception:
-                        log.exception(
-                            "Failed to send client transfer receipt deal_id=%s chat_id=%s",
-                            result.deal_id, chat_id,
-                        )
-        await message.answer(
-            f"Перевод #{result.deal_id} проведён{suffix}.\n"
-            f"Получатель: {result.to_client_name}\n"
-            f"Списано: {format_amount_core(result.amount, result.precision)} {result.currency}\n"
-            f"Баланс: {format_amount_core(result.from_balance, result.precision)} {result.currency}"
-        )
-        if not result.repeated and message.bot is not None:
-            try:
-                await message.bot.send_message(
-                    result.to_chat_id,
-                    f"Перевод #{result.deal_id} от {result.from_client_name}.\n"
-                    f"Зачислено: {format_amount_core(result.amount, result.precision)} {result.currency}\n"
-                    f"Баланс: {format_amount_core(result.to_balance, result.precision)} {result.currency}",
-                )
-            except Exception:
-                log.exception(
-                    "Failed to notify recipient of client transfer deal_id=%s chat_id=%s",
-                    result.deal_id, result.to_chat_id,
-                )
 
     @manager_or_admin_callback_required
     async def _cb_client_transfer(self, cq: CallbackQuery) -> None:
