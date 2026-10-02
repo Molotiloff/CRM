@@ -118,8 +118,8 @@ class FakeExchangeRequests:
     async def upsert_exchange_request_link(self, **kwargs):
         self.upsert_call = deepcopy(kwargs)
 
-    async def set_exchange_request_status(self, **kwargs):
-        self.status_call = deepcopy(kwargs)
+    async def claim_exchange_request_cancellation(self, **kwargs):
+        self.status_call = {**deepcopy(kwargs), "status": "cancelled"}
         return True
 
 

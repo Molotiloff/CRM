@@ -6,7 +6,6 @@ from domain import (
     Deal,
     ExchangeDealBody,
     ExchangeRequestSource,
-    ExchangeRequestStatus,
     SourceKind,
 )
 from services.exchange.balance_service import ExchangeBalanceService
@@ -68,9 +67,11 @@ class ExchangeDealSourceAdapter:
         *,
         repository: DealSourceRepositoryPort,
         balance_service: ExchangeBalanceService,
+        request_chat_id: int | None = None,
     ) -> None:
         self._repository = repository
         self._balance = balance_service
+        self._request_chat_id = request_chat_id
 
     async def prepare_edit(
         self,
@@ -125,6 +126,10 @@ class ExchangeDealSourceAdapter:
         req_id = deal.exchange_client_req_id or body.request_id
         source = await self._source(req_id)
         message = source.primary_message
+        if not await unit_of_work.exchange_requests.claim_exchange_request_cancellation(
+            client_req_id=req_id
+        ):
+            raise DealValidationError(f"Exchange request {req_id} is already canceled")
         await self._balance.apply_cancel(
             client_id=_required_int(deal.client_id, "deal client id"),
             chat_id=message.chat_id,
@@ -134,16 +139,10 @@ class ExchangeDealSourceAdapter:
             recv_amount=source.receive.amount,
             pay_code=str(source.pay.currency),
             pay_amount=source.pay.amount,
-            recv_is_deposit=True,
-            pay_is_withdraw=True,
+            recv_is_deposit=_original_leg_flag(deal, "recv_is_deposit", self._request_chat_id),
+            pay_is_withdraw=_original_leg_flag(deal, "pay_is_withdraw", self._request_chat_id),
             unit_of_work=unit_of_work,
         )
-        updated = await unit_of_work.exchange_requests.set_exchange_request_status(
-            client_req_id=req_id,
-            status=ExchangeRequestStatus.CANCELLED,
-        )
-        if not updated:
-            raise DealValidationError(f"Exchange request link {req_id} is not active")
 
     async def _source(self, request_id: str) -> ExchangeRequestSource:
         if not request_id:
@@ -172,3 +171,16 @@ def _required_int(value: object, field: str) -> int:
         return int(value)
     except (TypeError, ValueError):
         raise DealValidationError(f"Missing {field}") from None
+
+
+def _original_leg_flag(deal: Deal, key: str, request_chat_id: int | None) -> bool:
+    stored = deal.body.get(key)
+    if isinstance(stored, bool):
+        return stored
+    if deal.source.value == "crm":
+        return True
+    try:
+        origin_chat_id = int(str(deal.source_ref).split(":", 1)[0])
+    except (TypeError, ValueError):
+        return False
+    return request_chat_id is not None and origin_chat_id == request_chat_id

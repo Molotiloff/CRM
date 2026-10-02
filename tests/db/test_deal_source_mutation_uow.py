@@ -78,7 +78,7 @@ def _source_mutation_service(pool, event_bus: DealEventBus):
     )
 
 
-async def _seed_exchange(pool, repo, client_id: int, *, suffix: str):
+async def _seed_exchange(pool, repo, client_id: int, *, suffix: str, source: str = "tg_bot"):
     req_id = f"CRM-{suffix}"
     await repo.deposit(
         client_id=client_id,
@@ -120,7 +120,7 @@ async def _seed_exchange(pool, repo, client_id: int, *, suffix: str):
             city="екб",
             actor_user_id=None,
             client_id=client_id,
-            source="tg_bot",
+            source=source,
             source_kind="exchange",
             source_ref=f"test:{suffix}",
             exchange_client_req_id=req_id,
@@ -132,6 +132,8 @@ async def _seed_exchange(pool, repo, client_id: int, *, suffix: str):
                 "pay_code": "RUB",
                 "pay_amount": "9000",
                 "rate": "90",
+                "recv_is_deposit": True,
+                "pay_is_withdraw": True,
             },
         )
     )
@@ -209,6 +211,31 @@ async def test_exchange_source_cancel_commits_reversal_status_event_and_outbox(
         ("new", "canceled"),
     ]
     assert [(row["kind"], row["status"]) for row in outbox] == [("deal_status_changed", "pending")]
+
+
+async def test_crm_exchange_source_can_be_cancelled_from_crm(pool, repo, client_id) -> None:
+    req_id, deal = await _seed_exchange(
+        pool, repo, client_id, suffix="CRMCANCEL", source="crm"
+    )
+    service = _source_mutation_service(pool, DealEventBus())
+    async with pool.acquire() as connection:
+        actor_user_id = await connection.fetchval(
+            "INSERT INTO users (tg_user_id, display_name, role) "
+            "VALUES (7012, 'CRM manager', 'manager') RETURNING id"
+        )
+
+    canceled = await service.cancel(deal.id, actor_user_id=actor_user_id)
+
+    assert canceled.status == "canceled"
+    assert await balance_of(repo, client_id, "USDT") == Decimal("0.00")
+    assert await balance_of(repo, client_id, "RUB") == Decimal("0.00")
+    link = await ExchangeRequestsRepo(pool).get_exchange_request_link(client_req_id=req_id)
+    assert link is not None and link["status"] == "cancelled"
+    async with pool.acquire() as connection:
+        outbox = await connection.fetchval(
+            "SELECT count(*) FROM tg_outbox WHERE kind='deal_status_changed'"
+        )
+    assert outbox == 1
 
 
 async def test_deal_write_failure_rolls_back_exchange_source_and_emits_no_event(

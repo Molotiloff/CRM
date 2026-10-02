@@ -51,7 +51,10 @@ class DealSourceMutationService:
             return deal
         if DealStatus.CANCELED not in DealStatusPolicy.allowed_transitions(deal):
             raise DealValidationError(f"Deal in status {deal.status} cannot be canceled")
-        self._require_tg_source(deal)
+        if deal.source is not DealSource.TELEGRAM and not (
+            deal.source is DealSource.CRM and deal.source_kind is SourceKind.EXCHANGE
+        ):
+            raise DealValidationError("Only Telegram-backed or CRM exchange deals can be canceled")
         adapter = self._adapters.require(deal.source_kind)
         payload = {"comment": comment} if comment else {}
 

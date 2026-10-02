@@ -397,6 +397,94 @@ class TestCancelCore:
         assert any("отменена" in r for r in replier.replies)
         assert "Заявка отменена" in replier.alerts
 
+    @pytest.mark.parametrize("cancel_in_request_chat", [False, True])
+    async def test_crm_created_exchange_cancelled_in_telegram_reverts_original_legs(
+        self,
+        pool,
+        cash_request_repo,
+        exchange_requests_repo,
+        cancel_uc,
+        repo,
+        client_id,
+        cancel_in_request_chat: bool,
+    ) -> None:
+        await repo.add_currency(client_id, "EUR", 2)
+        create_uc = CreateExchangeRequest(
+            **_common_deps(cash_request_repo, pool, exchange_requests_repo),
+            deal_registrar=_deal_registrar(pool),
+        )
+        created_messages = FakeMessenger()
+        created = await create_uc.execute_core(
+            _create_params(
+                source="crm",
+                recv_code="RUB",
+                recv_amount_expr="1",
+                pay_code="EUR",
+                pay_amount_expr="1",
+            ),
+            messenger=created_messages,
+            replier=CollectingReplier(),
+        )
+        assert created.ok and created.req_id
+        assert await balance_of(repo, client_id, "RUB") == Decimal("1.00")
+        assert await balance_of(repo, client_id, "EUR") == Decimal("-1.00")
+
+        card_chat = REQUEST_CHAT if cancel_in_request_chat else CLIENT_CHAT
+        card = created_messages.sent_to(card_chat)[0]
+        cancelled = await cancel_uc.execute_core(
+            CancelExchangeParams(
+                chat_id=card_chat,
+                chat_name="Заявочный чат" if cancel_in_request_chat else "Тестовый чат",
+                card_message_id=card.message_id,
+                card_text=(
+                    f"Заявка: {created.req_id}\nПолучаем: 1 rub\n"
+                    "Курс: 1\nОтдаём: 1 eur"
+                ),
+                req_id=created.req_id,
+                recv_is_deposit=False,
+                pay_is_withdraw=False,
+            ),
+            messenger=FakeMessenger(),
+            replier=CollectingReplier(),
+        )
+
+        deal = await DealRepository(pool).get_by_exchange_request_id(created.req_id)
+        assert cancelled.ok
+        assert deal is not None and deal.status == "canceled"
+        assert await balance_of(repo, client_id, "RUB") == Decimal("0.00")
+        assert await balance_of(repo, client_id, "EUR") == Decimal("0.00")
+        link = await exchange_requests_repo.get_exchange_request_link(client_req_id=created.req_id)
+        assert link is not None and link["status"] == "cancelled"
+        async with pool.acquire() as connection:
+            outbox = await connection.fetchval(
+                "SELECT count(*) FROM tg_outbox WHERE kind='deal_status_changed'"
+            )
+            client_name = await connection.fetchval(
+                "SELECT name FROM clients WHERE id=$1", client_id
+            )
+        assert outbox == 1
+        assert client_name == "Тестовый чат"
+
+        repeated = await cancel_uc.execute_core(
+            CancelExchangeParams(
+                chat_id=card_chat,
+                chat_name="Тестовый чат",
+                card_message_id=card.message_id,
+                card_text=(
+                    f"Заявка: {created.req_id}\nПолучаем: 1 rub\n"
+                    "Курс: 1\nОтдаём: 1 eur"
+                ),
+                req_id=created.req_id,
+                recv_is_deposit=False,
+                pay_is_withdraw=False,
+            ),
+            messenger=FakeMessenger(),
+            replier=CollectingReplier(),
+        )
+        assert not repeated.ok
+        assert await balance_of(repo, client_id, "RUB") == Decimal("0.00")
+        assert await balance_of(repo, client_id, "EUR") == Decimal("0.00")
+
     async def test_unparsable_card_rejected(self, cancel_uc, repo, client_id) -> None:
         replier = CollectingReplier()
         result = await cancel_uc.execute_core(
@@ -424,7 +512,7 @@ class TestCancelCore:
 
         monkeypatch.setattr(
             ExchangeRequestsRepo,
-            "set_exchange_request_status",
+            "claim_exchange_request_cancellation",
             fail_status,
         )
         messenger = FakeMessenger()

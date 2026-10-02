@@ -362,6 +362,7 @@ class ApplicationContainer:
             transaction=ExchangeTransactionService(
                 unit_of_work_factory=unit_of_work_factory,
                 balance_service=exchange_balance,
+                deal_service=deal_service,
             ),
             source_links=ExchangeSourceLinkService(operational.exchange_requests),
             notifications=ExchangeNotificationBuilder(),
@@ -386,6 +387,7 @@ class ApplicationContainer:
                     ExchangeDealSourceAdapter(
                         repository=crm_repositories.deal_sources,
                         balance_service=exchange.balance,
+                        request_chat_id=config.request_chat_id,
                     ),
                     CashDealSourceAdapter(
                         repository=crm_repositories.deal_sources,

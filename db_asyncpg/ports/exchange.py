@@ -7,6 +7,8 @@ from typing import Any, Protocol
 class ExchangeRequestRepositoryPort(Protocol):
     def table_write_lock(self, table_req_id: str) -> AbstractAsyncContextManager[None]: ...
 
+    async def claim_exchange_request_cancellation(self, *, client_req_id: str) -> bool: ...
+
     async def upsert_exchange_request_link(
         self,
         *,

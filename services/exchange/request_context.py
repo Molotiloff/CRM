@@ -13,6 +13,7 @@ class ExchangeRequestContext:
     request_message: TelegramMessageRef | None
     request_text: str | None
     table_done: bool
+    client_message: TelegramMessageRef | None = None
 
     @classmethod
     def from_record(cls, record: Mapping[str, Any]) -> ExchangeRequestContext:
@@ -23,6 +24,9 @@ class ExchangeRequestContext:
             ),
             request_text=_optional_text(record.get("request_text")),
             table_done=bool(record.get("is_table_done")),
+            client_message=_optional_message(
+                record.get("client_chat_id"), record.get("client_message_id")
+            ),
         )
 
 

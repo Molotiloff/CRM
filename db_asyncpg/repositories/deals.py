@@ -15,6 +15,15 @@ from services.crm.deal_service import (
 
 
 class DealRepository(ConnectionBoundRepo):
+    async def get_by_exchange_request_id(self, request_id: str) -> Deal | None:
+        async with self._connection() as con:
+            deal_id = await con.fetchval(
+                """SELECT id FROM deals WHERE source_kind='exchange'
+                   AND exchange_client_req_id=$1 ORDER BY id DESC LIMIT 1""",
+                str(request_id),
+            )
+        return await self.get_deal(int(deal_id)) if deal_id is not None else None
+
     async def get_by_source_ref(self, source_ref: str) -> Deal | None:
         async with self._connection() as con:
             deal_id = await con.fetchval(
@@ -286,7 +295,7 @@ class DealRepository(ConnectionBoundRepo):
         async with self._connection() as con:
             async with con.transaction():
                 row = await con.fetchrow(
-                    "SELECT status, source FROM deals WHERE id = $1 FOR UPDATE", deal_id
+                    "SELECT status, source, source_kind FROM deals WHERE id = $1 FOR UPDATE", deal_id
                 )
                 if row is None:
                     return None
@@ -338,7 +347,9 @@ class DealRepository(ConnectionBoundRepo):
                         command.actor_user_id,
                         json.dumps(payload),
                     )
-                    if row["source"] == "tg_bot":
+                    if row["source"] == "tg_bot" or (
+                        row["source"] == "crm" and row["source_kind"] == "exchange"
+                    ):
                         outbox_payload = {
                             "dealId": deal_id,
                             "statusEventId": int(status_event_id),

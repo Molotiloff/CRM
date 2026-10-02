@@ -8,6 +8,16 @@ from db_asyncpg.repositories.base import ConnectionBoundRepo
 
 
 class ExchangeRequestsRepo(ConnectionBoundRepo):
+    async def claim_exchange_request_cancellation(self, *, client_req_id: str) -> bool:
+        async with self._connection() as con:
+            result = await con.fetchval(
+                """UPDATE exchange_request_links SET status='cancelled', updated_at=now()
+                   WHERE client_req_id=$1 AND status <> 'cancelled'
+                   RETURNING client_req_id""",
+                str(client_req_id),
+            )
+            return result is not None
+
     @asynccontextmanager
     async def table_write_lock(self, table_req_id: str) -> AsyncIterator[None]:
         # Session lock spans the external Sheets write and the DB completion flag.

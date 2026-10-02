@@ -143,6 +143,8 @@ class CreateExchangeRequest(_ExchangeUseCaseBase):
                 city=params.city,
                 referrer_client_id=params.referrer_client_id,
                 referrer_percent=params.referrer_percent,
+                recv_is_deposit=params.recv_is_deposit,
+                pay_is_withdraw=params.pay_is_withdraw,
             )
 
             try:

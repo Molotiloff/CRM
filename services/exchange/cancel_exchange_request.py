@@ -11,7 +11,7 @@ from services.exchange.card_parser import parse_get_give
 from services.exchange.notification_builder import CancelledBalanceLeg
 from services.exchange.transaction_service import CancelExchangeTransaction
 from services.exchange.use_case_base import _ExchangeUseCaseBase
-from services.exchange.workflow_policy import is_request_chat, tracked_exchange_currencies
+from services.exchange.workflow_policy import tracked_exchange_currencies
 from services.messaging import MessengerError, MessengerPort, ReplierPort
 
 log = logging.getLogger(__name__)
@@ -63,9 +63,14 @@ class CancelExchangeRequest(_ExchangeUseCaseBase):
 
         (recv_amt_raw, recv_code), (pay_amt_raw, pay_code) = parsed_amounts
 
-        client_id = await self.repo.ensure_client(chat_id=chat_id, name=params.chat_name)
+        meta = await self._get_exchange_request_meta(req_id_s)
+        wallet_chat_id = meta.client_message.chat_id if meta and meta.client_message else chat_id
+        if wallet_chat_id == self.request_chat_id:
+            await replier.alert("Не найден чат клиента для отмены заявки")
+            return CancelExchangeResult(ok=False, error="client chat missing")
+        client_name = params.chat_name if wallet_chat_id == chat_id else ""
+        client_id = await self.repo.ensure_client(chat_id=wallet_chat_id, name=client_name)
         accounts = await self.repo.snapshot_wallet(client_id)
-        single_request_chat_card = is_request_chat(chat_id, self.request_chat_id)
 
         def find_account(code: str):
             return next(
@@ -83,7 +88,6 @@ class CancelExchangeRequest(_ExchangeUseCaseBase):
         pay_prec = int(acc_pay["precision"])
         recv_amt = recv_amt_raw.quantize(Decimal(10) ** -recv_prec, rounding=ROUND_HALF_UP)
         pay_amt = pay_amt_raw.quantize(Decimal(10) ** -pay_prec, rounding=ROUND_HALF_UP)
-        meta = await self._get_exchange_request_meta(req_id_s)
         table_req_id = params.table_req_id_hint or (meta.table_request_id if meta else None)
 
         try:
@@ -103,8 +107,10 @@ class CancelExchangeRequest(_ExchangeUseCaseBase):
                     tracked_currency_codes=tracked_exchange_currencies(
                         chat_id, self.request_chat_id
                     ),
+                    request_chat_id=self.request_chat_id,
                 )
             )
+            client_id = transaction_result.client_id
             recv_op_sign = transaction_result.receive_operation_sign
             pay_op_sign = transaction_result.pay_operation_sign
         except Exception as e:
