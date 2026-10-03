@@ -8,6 +8,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramMigrateToChat
+from aiogram.methods.send_media_group import MediaUnion
 from aiogram.types import InputMediaPhoto, Message
 
 from db_asyncpg.ports.workflows import ClientTransferRepositoryPort
@@ -271,7 +272,7 @@ async def city_cash_transfer_to_client(
 
     async def _send_receipt(chat_id: int):
         if len(photo_file_ids) > 1:
-            media = [
+            media: list[MediaUnion] = [
                 InputMediaPhoto(media=file_id, caption=caption if idx == 0 else None)
                 for idx, file_id in enumerate(photo_file_ids)
             ]

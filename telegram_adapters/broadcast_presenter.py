@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from aiogram import Bot
+from aiogram.methods.send_media_group import MediaUnion
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Message
 
 from telegram_adapters.broadcast_models import (
@@ -42,32 +44,32 @@ class AiogramBroadcastPresenter:
         target_group: str | None,
     ) -> tuple[int, BroadcastPayload] | None:
         if source_message.photo:
-            payload = PhotoBroadcastPayload(
+            photo_payload = PhotoBroadcastPayload(
                 file_id=source_message.photo[-1].file_id,
                 caption=source_message.caption,
                 caption_entities=tuple(source_message.caption_entities or ()),
                 group=target_group,
             )
             preview = await source_message.answer_photo(
-                photo=payload.file_id,
-                caption=payload.caption,
-                caption_entities=list(payload.caption_entities),
+                photo=photo_payload.file_id,
+                caption=photo_payload.caption,
+                caption_entities=list(photo_payload.caption_entities),
                 reply_markup=self.build_confirm_keyboard(),
             )
-            return preview.message_id, payload
+            return preview.message_id, photo_payload
 
         if source_message.text:
-            payload = TextBroadcastPayload(
+            text_payload = TextBroadcastPayload(
                 text=source_message.text,
                 entities=tuple(source_message.entities or ()),
                 group=target_group,
             )
             preview = await source_message.answer(
-                text=payload.text,
-                entities=list(payload.entities),
+                text=text_payload.text,
+                entities=list(text_payload.entities),
                 reply_markup=self.build_confirm_keyboard(),
             )
-            return preview.message_id, payload
+            return preview.message_id, text_payload
 
         await source_message.answer("Неподдерживаемый формат сообщения для рассылки.")
         return None
@@ -88,8 +90,8 @@ class AiogramBroadcastPresenter:
         caption_message = next((message for message in photos if message.caption), None)
         caption = caption_message.caption if caption_message else None
         caption_entities = tuple(caption_message.caption_entities or ()) if caption_message else ()
-        file_ids = tuple(message.photo[-1].file_id for message in photos)
-        media = [
+        file_ids = tuple(message.photo[-1].file_id for message in photos if message.photo)
+        media: list[MediaUnion] = [
             InputMediaPhoto(
                 media=file_id,
                 caption=caption if index == 0 else None,
@@ -98,7 +100,10 @@ class AiogramBroadcastPresenter:
             for index, file_id in enumerate(file_ids)
         ]
 
-        await messages[0].bot.send_media_group(chat_id=messages[0].chat.id, media=media)
+        bot = messages[0].bot
+        if not isinstance(bot, Bot):
+            raise RuntimeError("Broadcast bot is unavailable")
+        await bot.send_media_group(chat_id=messages[0].chat.id, media=media)
         control = await messages[0].answer(
             f"Подтвердите рассылку альбома {target_label}:",
             reply_markup=self.build_confirm_keyboard(),

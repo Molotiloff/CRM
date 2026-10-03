@@ -63,12 +63,13 @@ class CashCardParser:
         source: RequestEditSource,
         city: str,
     ) -> CashEditCardSnapshot | None:
+        codes: tuple[str, ...] | None
         if source.kind in {"dep", "wd"}:
             snapshot = parse_dep_wd_snapshot(card_text, city=city)
             codes = (snapshot.code,) if snapshot else None
         else:
-            snapshot = parse_fx_snapshot(card_text, city=city)
-            codes = (snapshot.in_code, snapshot.out_code) if snapshot else None
+            fx_snapshot = parse_fx_snapshot(card_text, city=city)
+            codes = (fx_snapshot.in_code, fx_snapshot.out_code) if fx_snapshot else None
         if codes is None:
             return None
         return CashEditCardSnapshot(

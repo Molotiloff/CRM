@@ -166,7 +166,7 @@ class Deal:
         object.__setattr__(
             self,
             "city",
-            self.city if isinstance(self.city, CityCode) else CityCode(self.city),
+            self.city if isinstance(self.city, CityCode) else CityCode(str(self.city)),
         )
         object.__setattr__(
             self,
@@ -326,7 +326,7 @@ def _optional_int(value: object, field: str) -> int | None:
     if value is None:
         return None
     try:
-        return int(value)
+        return int(str(value))
     except (TypeError, ValueError):
         raise DomainValidationError(f"Invalid {field}: {value!r}") from None
 

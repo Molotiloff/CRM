@@ -139,6 +139,7 @@ class DealSettlementService:
             )
             if (
                 accept_actual
+                and fulfillment is not None
                 and fulfillment.request_kind is FulfillmentRequestKind.SALE
             ):
                 # The contractual USDT leg was posted when the deal was created.

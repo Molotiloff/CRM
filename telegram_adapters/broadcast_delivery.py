@@ -4,6 +4,7 @@ import logging
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.methods.send_media_group import MediaUnion
 from aiogram.types import InputMediaPhoto
 
 from services.broadcast import BroadcastDeliveryStatus
@@ -55,7 +56,7 @@ class AiogramBroadcastDelivery:
             )
             return
 
-        media = [
+        media: list[MediaUnion] = [
             InputMediaPhoto(
                 media=file_id,
                 caption=self.payload.caption if index == 0 else None,

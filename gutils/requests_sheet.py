@@ -39,7 +39,7 @@ _RATE_CODE_ALIASES = {"USD BL": "USD", "USD WH": "USDW"}
 # HTTP-клиент Google не рассчитан на совместное использование несколькими потоками.
 # Кешируем сервис и вложенные ресурсы отдельно в каждом рабочем потоке.
 _thread_cache = threading.local()
-_cached = {"spreadsheet_id": None}
+_cached: dict[str, str | None] = {"spreadsheet_id": None}
 
 _GOOGLE_API_TIMEOUT_SECONDS = 30.0
 _GOOGLE_API_NUM_RETRIES = 3

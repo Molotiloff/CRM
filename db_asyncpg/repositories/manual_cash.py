@@ -51,13 +51,13 @@ class ManualCashRepo(ConnectionBoundRepo):
         async with self._connection() as connection:
             await connection.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended('manual-cash:' || $1, 0))",
-                command.account_code.value,
+                ManualCashAccountCode(command.account_code).value,
             )
             existing = await self._existing(connection, command.idempotency_key)
             if existing is not None:
                 if (
                     existing.account_code != command.account_code
-                    or existing.operation != command.operation.value
+                    or existing.operation != ManualCashOperation(command.operation).value
                     or existing.amount != command.amount
                     or existing.effective_at != command.effective_at
                     or existing.comment != command.comment
@@ -83,7 +83,7 @@ class ManualCashRepo(ConnectionBoundRepo):
                 balance if delta > 0 else None,
                 command.actor_user_id,
                 command.comment,
-                command.operation.value,
+                ManualCashOperation(command.operation).value,
                 command.effective_at,
                 command.idempotency_key,
             )

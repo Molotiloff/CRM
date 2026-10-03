@@ -5,7 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from domain import DealType, DomainStateError, DomainValidationError
+from domain import CurrencyCode, DealType, DomainStateError, DomainValidationError
 from services.unit_of_work import UnitOfWorkFactory, UnitOfWorkPort
 
 from .firm_position_service import FirmPositionAccountingService
@@ -270,11 +270,11 @@ class AccountingImportService:
             )
             return "firm_position_moves", move.id
         if record.kind is ImportEntityKind.WALLET_FACT:
-            currency = self._currency(payload)
+            fact_currency = CurrencyCode(self._currency(payload))
             observed_at = self._datetime(payload.get("observedAt") or manifest.cutover_at)
-            await unit_of_work.wallet_facts.acquire_fact_lock(currency)
+            await unit_of_work.wallet_facts.acquire_fact_lock(fact_currency)
             snapshot = await unit_of_work.wallet_facts.append_snapshot(
-                currency=currency,
+                currency=fact_currency,
                 actual_qty=self._decimal(payload, "qty"),
                 observed_at=observed_at,
                 source=WalletFactSource.IMPORT,

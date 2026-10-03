@@ -95,6 +95,6 @@ class BroadcastService:
 
 def _chat_id_or_none(value: object) -> int | None:
     try:
-        return int(value)  # type: ignore[arg-type]
+        return int(str(value))
     except (TypeError, ValueError):
         return None

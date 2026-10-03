@@ -115,7 +115,7 @@ class BestChangeHandler:
             try:
                 if len(parts) != 3:
                     raise ValueError("Для закрытия месяц нужно указать явно.")
-                result = await self.service.close_month(
+                close_result = await self.service.close_month(
                     CloseBestChangeMonth(
                         period_month=parse_best_change_period(parts[2]),
                         actor_tg_user_id=message.from_user.id,
@@ -127,7 +127,7 @@ class BestChangeHandler:
                 await message.answer(f"{error}\n\nЗакрытие: /бест закрыть ММ.ГГГГ")
                 return
             await message.answer(
-                format_month_report(result.report, repeated=result.repeated)
+                format_month_report(close_result.report, repeated=close_result.repeated)
             )
             return
         if subcommand == "выплата":
@@ -135,7 +135,7 @@ class BestChangeHandler:
                 kind, period_month, amount, payment_reference = (
                     parse_best_change_payment_command(message.text or "")
                 )
-                result = await self.service.record_payment(
+                payment_result = await self.service.record_payment(
                     RecordBestChangePayment(
                         period_month=period_month,
                         kind=kind,
@@ -153,7 +153,7 @@ class BestChangeHandler:
                     "ММ.ГГГГ <сумма> <ссылка>"
                 )
                 return
-            await message.answer(format_payment_result(result))
+            await message.answer(format_payment_result(payment_result))
             return
         if subcommand == "сторно":
             try:
@@ -161,18 +161,22 @@ class BestChangeHandler:
                     message.text or ""
                 )
                 if target == "payment":
-                    result = await self.service.reverse_payment(
+                    if not isinstance(value, int):
+                        raise ValueError("Нужен числовой ID выплаты")
+                    reversal_payment_result = await self.service.reverse_payment(
                         ReverseBestChangePayment(
-                            payment_id=int(value),
+                            payment_id=value,
                             actor_tg_user_id=message.from_user.id,
                             chat_id=message.chat.id,
                             message_id=message.message_id,
                             reason=reason,
                         )
                     )
-                    response = format_payment_reversal_result(result)
+                    response = format_payment_reversal_result(reversal_payment_result)
                 else:
-                    result = await self.service.reverse_month(
+                    if not isinstance(value, date):
+                        raise ValueError("Нужен месяц закрытия")
+                    reversal_month_result = await self.service.reverse_month(
                         ReverseBestChangeMonth(
                             period_month=value,
                             actor_tg_user_id=message.from_user.id,
@@ -181,7 +185,7 @@ class BestChangeHandler:
                             reason=reason,
                         )
                     )
-                    response = format_month_reversal_result(result)
+                    response = format_month_reversal_result(reversal_month_result)
             except (DomainStateError, DomainValidationError, ValueError) as error:
                 await message.answer(
                     f"{error}\n\n"
@@ -202,7 +206,7 @@ class BestChangeHandler:
                     client_rate,
                     reason,
                 ) = parse_best_change_correction_command(message.text or "")
-                result = await self.service.correct_deal(
+                correction_result = await self.service.correct_deal(
                     CorrectBestChangeDeal(
                         deal_id=deal_id,
                         operation=operation,
@@ -224,7 +228,7 @@ class BestChangeHandler:
                     "<курс биржи> <курс клиента> <причина>"
                 )
                 return
-            await message.answer(format_best_change_correction_result(result))
+            await message.answer(format_best_change_correction_result(correction_result))
             return
 
         if subcommand == "история":
@@ -237,7 +241,7 @@ class BestChangeHandler:
                     market_rate,
                     client_rate,
                 ) = parse_best_change_history_command(message.text or "")
-                result = await self.service.record(
+                historical_result = await self.service.record(
                     RecordBestChangeDeal(
                         operation=operation,
                         city=city,
@@ -256,7 +260,7 @@ class BestChangeHandler:
                 return
             await message.answer(
                 f"📅 Дата исторической сделки: {deal_at:%d.%m.%Y}\n"
-                f"{format_best_change_result(result)}"
+                f"{format_best_change_result(historical_result)}"
             )
             return
 
@@ -264,7 +268,7 @@ class BestChangeHandler:
             operation, city, qty, market_rate, client_rate = parse_best_change_command(
                 message.text or ""
             )
-            result = await self.service.record(
+            new_result = await self.service.record(
                 RecordBestChangeDeal(
                     operation=operation,
                     city=city,
@@ -281,7 +285,7 @@ class BestChangeHandler:
             await message.answer(f"{error}\n\n{_USAGE}")
             return
 
-        await message.answer(format_best_change_result(result))
+        await message.answer(format_best_change_result(new_result))
 
     @manager_or_admin_message_required
     async def _cmd_wallet(self, message: Message) -> None:

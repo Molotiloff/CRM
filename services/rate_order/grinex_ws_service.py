@@ -11,6 +11,7 @@ from decimal import Decimal, InvalidOperation
 import certifi
 import websockets
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
+from websockets.typing import Origin
 
 from services.lifecycle import ManagedTaskLifecycle
 
@@ -90,7 +91,7 @@ class GrinexWsService(ManagedTaskLifecycle):
                 log.info("Grinex websocket connecting")
                 async with websockets.connect(
                     WS_URL,
-                    origin="https://grinex.io",
+                    origin=Origin("https://grinex.io"),
                     ssl=self._ssl_context,
                     ping_interval=30,
                     ping_timeout=60,

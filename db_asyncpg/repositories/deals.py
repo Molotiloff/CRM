@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from db_asyncpg.repositories.base import ConnectionBoundRepo
-from domain import Deal, DomainStateError, DomainValidationError
+from domain import Deal, DealBody, DealEventPayload, DomainStateError, DomainValidationError
 from services.crm.deal_service import (
     DealCreateCommand,
     DealListFilter,
@@ -192,7 +192,7 @@ class DealRepository(ConnectionBoundRepo):
                     command.source,
                     command.comment,
                     command.tronscan_url,
-                    json.dumps(command.body.to_dict()),
+                    json.dumps(command.body.to_dict() if isinstance(command.body, DealBody) else dict(command.body)),
                     command.profit,
                     command.deal_at,
                     command.exchange_client_req_id,
@@ -294,8 +294,8 @@ class DealRepository(ConnectionBoundRepo):
             if command.expected_old_status is not None
             else None
         )
-        payload = command.payload.to_dict()
-        body_patch = command.body_patch.to_dict()
+        payload = command.payload.to_dict() if isinstance(command.payload, DealEventPayload) else dict(command.payload)
+        body_patch = command.body_patch.to_dict() if isinstance(command.body_patch, DealBody) else dict(command.body_patch)
         async with self._connection() as con:
             async with con.transaction():
                 row = await con.fetchrow(

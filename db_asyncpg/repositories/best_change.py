@@ -411,7 +411,7 @@ class BestChangeRepo(ConnectionBoundRepo):
                         WHERE closure_id = $1 AND payment_kind = $2
                         """,
                         int(closure["id"]),
-                        command.kind.value,
+                        BestChangePaymentKind(command.kind).value,
                     )
                 )
             )
@@ -451,7 +451,7 @@ class BestChangeRepo(ConnectionBoundRepo):
                 RETURNING id
                 """,
                 int(closure["id"]),
-                command.kind.value,
+                BestChangePaymentKind(command.kind).value,
                 command.currency,
                 command.amount,
                 command.payment_reference,
@@ -1058,7 +1058,7 @@ class BestChangeRepo(ConnectionBoundRepo):
     ) -> BestChangePaymentResult:
         return BestChangePaymentResult(
             payment_id=payment_id,
-            kind=command.kind,
+            kind=BestChangePaymentKind(command.kind),
             amount=command.amount,
             currency=command.currency,
             payment_reference=command.payment_reference,
@@ -1170,7 +1170,7 @@ class BestChangeRepo(ConnectionBoundRepo):
         if (
             int(row["chat_id"]) != command.chat_id
             or row["period_month"] != command.period_month
-            or row["payment_kind"] != command.kind.value
+            or row["payment_kind"] != BestChangePaymentKind(command.kind).value
             or row["currency_code"] != command.currency
             or Decimal(str(row["amount"])) != command.amount
             or row["payment_reference"] != command.payment_reference

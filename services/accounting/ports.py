@@ -200,7 +200,7 @@ class CashSettlementRepositoryPort(Protocol):
         command: CashSettlementCommand,
         actual_qty: Decimal,
         cash_transaction_id: int,
-        client_transaction_id: int,
+        client_transaction_id: int | None,
         position_move_id: int | None,
     ) -> CashSettlementResult: ...
 

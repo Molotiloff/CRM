@@ -6,7 +6,7 @@ from typing import Any
 from api.schemas.common import ErrorResponse
 
 
-def error_responses(*status_codes: int) -> dict[int, dict[str, Any]]:
+def error_responses(*status_codes: int) -> dict[int | str, dict[str, Any]]:
     return {
         status_code: {
             "description": HTTPStatus(status_code).phrase,

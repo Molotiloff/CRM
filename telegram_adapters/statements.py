@@ -12,6 +12,7 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    Message,
 )
 
 from db_asyncpg.ports.workflows import ClientTransactionRepositoryPort
@@ -120,7 +121,7 @@ async def handle_stmt_callback(cq: CallbackQuery, repo: ClientTransactionReposit
     Отправляет XLSX-файл в тот же чат.
     """
     msg = cq.message
-    if not msg:
+    if not isinstance(msg, Message):
         await cq.answer()
         return
 

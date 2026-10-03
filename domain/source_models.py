@@ -78,7 +78,7 @@ class ScheduleEntry:
         request_id = self.request_id.strip()
         line_text = self.line_text.strip()
         client_name = self.client_name.strip()
-        city = self.city if isinstance(self.city, CityCode) else CityCode(self.city)
+        city = self.city if isinstance(self.city, CityCode) else CityCode(str(self.city))
         try:
             kind = CashRequestKind(str(self.kind))
         except ValueError:

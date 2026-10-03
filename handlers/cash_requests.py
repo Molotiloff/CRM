@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
@@ -65,11 +65,15 @@ class CashRequestsHandler:
     async def _request(self, message: Message) -> None:
         if not await self._authorize_message(message):
             return
+        bot = message.bot
+        if not isinstance(bot, Bot):
+            await message.answer("Бот недоступен.")
+            return
         parsed = self.request_service.parse_command(message.text or "")
         if parsed is None:
             await message.answer(self.request_service.help_text())
             return
-        messenger = AiogramMessenger(message.bot)
+        messenger = AiogramMessenger(bot)
         replier = AiogramMessageReplier(message)
         client_group = (
             "internal_wallet" if message.chat.id in self.admin_chat_ids else None
@@ -85,7 +89,7 @@ class CashRequestsHandler:
         is_bot_reply = bool(
             reply
             and reply.from_user
-            and reply.from_user.id == message.bot.id
+            and reply.from_user.id == bot.id
             and (reply.text or reply.caption)
         )
         if is_bot_reply and reply is not None:
@@ -124,6 +128,10 @@ class CashRequestsHandler:
             return
         if not self.request_time_service.router_service.is_request_chat(message.chat.id):
             return
+        bot = message.bot
+        if not isinstance(bot, Bot):
+            await message.answer("Бот недоступен.")
+            return
         hhmm = self.request_time_service.parse_time((message.text or "").strip())
         if hhmm is None:
             await message.answer("Формат: /время 10:00")
@@ -136,7 +144,7 @@ class CashRequestsHandler:
         if not target_html.strip():
             await message.answer("Нужно ответить на сообщение с текстом.")
             return
-        messenger = AiogramMessenger(message.bot)
+        messenger = AiogramMessenger(bot)
 
         async def sync_schedule(city: str) -> None:
             await self.request_time_service.schedule_service.sync_board(
@@ -164,7 +172,7 @@ class CashRequestsHandler:
         if not await self._authorize_callback(callback):
             return
         message = callback.message
-        if message is None:
+        if not isinstance(message, Message):
             await callback.answer()
             return
         await self.request_issue_service.execute_core(
@@ -175,7 +183,7 @@ class CashRequestsHandler:
                 card_text=message.text or "",
                 callback_data=callback.data or "",
             ),
-            messenger=AiogramMessenger(callback.bot),
+            messenger=AiogramMessenger(_callback_bot(callback)),
             replier=AiogramCallbackReplier(callback),
         )
 
@@ -192,7 +200,7 @@ class CashRequestsHandler:
         if not await self._authorize_callback(callback):
             return
         message = callback.message
-        if message is None:
+        if not isinstance(message, Message):
             await callback.answer()
             return
         if not service.router_service.is_request_chat(message.chat.id):
@@ -202,7 +210,7 @@ class CashRequestsHandler:
             )
             return
         card_text, is_caption = _html_text(message)
-        messenger = AiogramMessenger(callback.bot)
+        messenger = AiogramMessenger(_callback_bot(callback))
 
         async def sync_schedule(city: str) -> None:
             await service.schedule_service.sync_board(messenger=messenger, city=city)
@@ -269,5 +277,12 @@ def _plain_text(message: Message) -> str:
 
 def _html_text(message: Message) -> tuple[str, bool]:
     if message.caption is not None and not message.text:
-        return (message.html_caption or message.caption or ""), True
+        return (message.html_text or message.caption or ""), True
     return (message.html_text or message.text or ""), False
+
+
+def _callback_bot(callback: CallbackQuery) -> Bot:
+    bot = callback.bot
+    if not isinstance(bot, Bot):
+        raise RuntimeError("Callback bot is unavailable")
+    return bot

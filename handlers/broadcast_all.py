@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
@@ -114,6 +114,8 @@ class BroadcastAllHandler:
         )
 
     async def _collect_and_preview_media_group(self, message: Message) -> None:
+        if message.media_group_id is None:
+            return
         key = self.session_store.add_media_group_message(
             chat_id=message.chat.id,
             media_group_id=message.media_group_id,
@@ -194,8 +196,13 @@ class BroadcastAllHandler:
             return
 
         msg = cq.message
-        if not msg:
+        if not isinstance(msg, Message):
             await cq.answer()
+            return
+
+        bot = msg.bot
+        if not isinstance(bot, Bot):
+            await cq.answer("Бот недоступен.", show_alert=True)
             return
 
         payload = self.session_store.get_payload(control_message_id=msg.message_id)
@@ -226,7 +233,7 @@ class BroadcastAllHandler:
         await cq.answer("Запускаю рассылку...")
         result = await self.broadcast_service.send(
             BroadcastCommand(target_group=payload.group),
-            delivery=AiogramBroadcastDelivery(bot=msg.bot, payload=payload),
+            delivery=AiogramBroadcastDelivery(bot=bot, payload=payload),
         )
         await msg.answer(
             self.broadcast_service.result_text(result),

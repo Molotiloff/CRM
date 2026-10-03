@@ -85,7 +85,8 @@ class BestChangeRepositoryPort(Protocol):
 
 
 class BestChangeUnitOfWorkPort(Protocol):
-    best_change: BestChangeRepositoryPort
+    @property
+    def best_change(self) -> BestChangeRepositoryPort: ...
 
     async def __aenter__(self) -> Self: ...
 

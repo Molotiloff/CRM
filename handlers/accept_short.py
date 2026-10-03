@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
@@ -76,13 +76,17 @@ class AcceptShortHandler:
                 admin_user_ids=self.admin_user_ids,
         ):
             return
+        bot = message.bot
+        if not isinstance(bot, Bot):
+            await message.answer("Бот недоступен.")
+            return
         try:
             reply_message = getattr(message, "reply_to_message", None)
             reply = None
             if reply_message and (reply_message.text or ""):
                 authored_by_bot = bool(
                     reply_message.from_user
-                    and reply_message.from_user.id == message.bot.id
+                    and reply_message.from_user.id == bot.id
                 )
                 reply = ExchangeReplyContext(
                     message_id=reply_message.message_id,
@@ -98,7 +102,7 @@ class AcceptShortHandler:
                     actor_name=_actor_name(message),
                     reply=reply,
                 ),
-                messenger=AiogramMessenger(message.bot),
+                messenger=AiogramMessenger(bot),
                 replier=AiogramMessageReplier(message),
             )
         except ValueError as exc:
@@ -113,7 +117,7 @@ class AcceptShortHandler:
         ):
             return
         message = cq.message
-        if not message or not message.text:
+        if not isinstance(message, Message) or not message.text:
             await cq.answer("Нет сообщения", show_alert=True)
             return
         parts = (cq.data or "").split(":")

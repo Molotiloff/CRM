@@ -89,7 +89,7 @@ class PaymentWatchHandler:
             await cq.answer(str(exc), show_alert=True)
             return
         await cq.answer("Ожидание продлено")
-        if cq.message:
+        if isinstance(cq.message, Message):
             await cq.message.edit_text(text, parse_mode="HTML")
 
     @manager_or_admin_callback_required
@@ -102,7 +102,7 @@ class PaymentWatchHandler:
             await cq.answer(str(exc), show_alert=True)
             return
         await cq.answer("Ожидание остановлено")
-        if cq.message:
+        if isinstance(cq.message, Message):
             await cq.message.edit_text(text, parse_mode="HTML")
 
     def _register(self) -> None:

@@ -11,7 +11,9 @@ from services.number_formatting import format_amount_core
 class ClientBalancesReportBuilder:
     @staticmethod
     def _chunk(text: str, limit: int = 3500) -> list[str]:
-        out, cur, total = [], [], 0
+        out: list[str] = []
+        cur: list[str] = []
+        total = 0
         for line in text.splitlines(True):
             if total + len(line) > limit and cur:
                 out.append("".join(cur))

@@ -225,7 +225,7 @@ def _optional_int(value: object) -> int | None:
     if value is None:
         return None
     try:
-        return int(value)
+        return int(str(value))
     except (TypeError, ValueError):
         raise DomainValidationError(f"Invalid integer: {value!r}") from None
 
@@ -235,7 +235,10 @@ def _optional_message_ref(chat_id: object, message_id: object) -> TelegramMessag
         return None
     if chat_id is None or message_id is None:
         raise DomainValidationError("Incomplete cash client Telegram message reference")
-    return TelegramMessageRef(chat_id, message_id)
+    parsed_chat_id = _optional_int(chat_id)
+    parsed_message_id = _optional_int(message_id)
+    assert parsed_chat_id is not None and parsed_message_id is not None
+    return TelegramMessageRef(parsed_chat_id, parsed_message_id)
 
 
 def _positive_decimal(value: object, field: str) -> Decimal:

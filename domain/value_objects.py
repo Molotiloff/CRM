@@ -68,8 +68,9 @@ class Money:
         precision: int | None = None,
     ) -> Money:
         parsed = _decimal(amount, field="money amount")
+        exponent = parsed.as_tuple().exponent
         resolved_precision = (
-            max(0, min(8, -parsed.as_tuple().exponent))
+            (max(0, min(8, -exponent)) if isinstance(exponent, int) else 0)
             if precision is None
             else precision
         )

@@ -214,13 +214,13 @@ def _financial_values(snapshot: MainDashboardSnapshot) -> dict[str, Decimal | No
                 f"{prefix}.physical_qty": physical_qty,
             }
         )
-    for item in snapshot.cities:
-        prefix = f"cities.{item.city.strip().lower()}"
+    for city_item in snapshot.cities:
+        prefix = f"cities.{city_item.city.strip().lower()}"
         values.update(
             {
-                f"{prefix}.income": item.income,
-                f"{prefix}.expense": item.expense,
-                f"{prefix}.profit": item.profit,
+                f"{prefix}.income": city_item.income,
+                f"{prefix}.expense": city_item.expense,
+                f"{prefix}.profit": city_item.profit,
             }
         )
     return values

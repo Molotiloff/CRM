@@ -168,7 +168,7 @@ def _plain_card(source: ExchangeRequestSource) -> str:
 
 def _required_int(value: object, field: str) -> int:
     try:
-        return int(value)
+        return int(str(value))
     except (TypeError, ValueError):
         raise DealValidationError(f"Missing {field}") from None
 

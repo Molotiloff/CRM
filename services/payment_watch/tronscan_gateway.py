@@ -137,7 +137,7 @@ class TronscanGateway:
                 continue
             try:
                 amount = Decimal(str(quant_raw)) / (Decimal(10) ** decimals)
-                block_ts = datetime.fromtimestamp(int(block_ts_raw) / 1000, tz=UTC)
+                block_ts = datetime.fromtimestamp(int(str(block_ts_raw)) / 1000, tz=UTC)
             except (InvalidOperation, ValueError, TypeError):
                 continue
             if tx_hash in skip_hashes:
@@ -154,7 +154,7 @@ class TronscanGateway:
                     amount=amount,
                     token_symbol=token_symbol,
                     block_number=(
-                        int(block_number_raw) if block_number_raw not in (None, "") else None
+                        int(str(block_number_raw)) if block_number_raw not in (None, "") else None
                     ),
                     block_ts=block_ts,
                     confirmations=confirmations,

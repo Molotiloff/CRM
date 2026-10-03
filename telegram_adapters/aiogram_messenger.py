@@ -20,7 +20,9 @@ def wrap_telegram_error(error: TelegramAPIError) -> MessengerError:
 
 
 class AiogramMessenger(MessengerPort):
-    def __init__(self, bot: Bot) -> None:
+    def __init__(self, bot: Bot | None) -> None:
+        if bot is None:
+            raise RuntimeError("Telegram bot is unavailable")
         self._bot = bot
 
     async def send(
@@ -146,4 +148,3 @@ class AiogramMessenger(MessengerPort):
     @staticmethod
     def _wrap(error: TelegramAPIError) -> MessengerError:
         return wrap_telegram_error(error)
-

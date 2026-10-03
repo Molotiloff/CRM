@@ -192,7 +192,7 @@ class StartHandler:
         await message.answer("Клавиатура скрыта. Чтобы вернуть — /кнопки.", reply_markup=ReplyKeyboardRemove())
 
     async def _cb_menu_help(self, cq: CallbackQuery) -> None:
-        if cq.message:
+        if isinstance(cq.message, Message):
             await self._show_help(cq.message)
         await cq.answer()
 

@@ -12,6 +12,7 @@ from decimal import Decimal, InvalidOperation
 import certifi
 import websockets
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
+from websockets.typing import Origin
 
 from services.lifecycle import ManagedTaskLifecycle
 
@@ -208,7 +209,7 @@ class RapiraWsService(ManagedTaskLifecycle):
 
                 async with websockets.connect(
                     WS_URL,
-                    origin="https://rapira.net",
+                    origin=Origin("https://rapira.net"),
                     ssl=self._ssl_context,
                     # Протокольный WS-ping ОТКЛЮЧЁН: socket.io/engine.io-сервер не
                     # отвечает на raw ping-фреймы, поэтому websockets через

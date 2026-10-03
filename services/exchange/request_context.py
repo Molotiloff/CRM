@@ -40,4 +40,4 @@ def _optional_message(chat_id: object, message_id: object) -> TelegramMessageRef
         return None
     if chat_id is None or message_id is None:
         raise DomainStateError("Incomplete exchange request Telegram reference")
-    return TelegramMessageRef(int(chat_id), int(message_id))
+    return TelegramMessageRef(int(str(chat_id)), int(str(message_id)))

@@ -339,17 +339,18 @@ def setup_handlers(
         )
 
     if config.rate_orders_chat_id:
-        services.rate_order_service = RateOrderService(
+        rate_order_service = RateOrderService(
             repo=rate_order_repo,
             orders_chat_id=config.rate_orders_chat_id,
             get_current_best_ask=lambda: (
                 services.market_ws_service.best_ask if services.market_ws_service else None
             ),
         )
+        services.rate_order_service = rate_order_service
 
         rate_order_handler = RateOrderHandler(
             manager_repo,
-            rate_order_service=services.rate_order_service,
+            rate_order_service=rate_order_service,
             messenger=container.messenger,
             admin_chat_ids=admin_chat_list,
             admin_user_ids=admin_user_list,
@@ -358,7 +359,7 @@ def setup_handlers(
         dp.include_router(rate_order_handler.router)
 
         services.market_ws_service.on_best_ask = (
-            lambda ask: services.rate_order_service.process_best_ask(
+            lambda ask: rate_order_service.process_best_ask(
                 messenger=container.messenger,
                 best_ask=ask,
             )
@@ -480,13 +481,14 @@ def setup_handlers(
     )
     dp.include_router(cash_requests_handler.router)
 
-    admin_request_handler = AdminRequestHandler(
-        repositories.client_wallets,
-        admin_chat_id=config.admin_chat_id,
-        request_chat_id=request_chat_id,
-        admin_user_ids=config.admin_ids,
-    )
-    dp.include_router(admin_request_handler.router)
+    if request_chat_id is not None:
+        admin_request_handler = AdminRequestHandler(
+            repositories.client_wallets,
+            admin_chat_id=config.admin_chat_id,
+            request_chat_id=request_chat_id,
+            admin_user_ids=config.admin_ids,
+        )
+        dp.include_router(admin_request_handler.router)
 
     balances_query_service = ClientBalancesQueryService(wallet_repo)
     balances_filter_service = ClientBalancesFilterService()

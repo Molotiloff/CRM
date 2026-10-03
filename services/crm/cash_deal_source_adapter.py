@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from domain import CashDealBody, CashRequestKind, Deal, ScheduleEntry, SourceKind
+from domain import CashDealBody, CashRequestKind, Deal, DealBody, ScheduleEntry, SourceKind
 from services.cash_requests.card_text_parser import upsert_time_line
 from services.cash_requests.edit_cash_request import EditCashRequest, EditCashRequestParams
 from services.cash_requests.parsing import ParsedRequest
@@ -175,7 +175,7 @@ def _updated_body(
     kind: CashRequestKind,
     client_text: str | None,
     request_text: str | None,
-) -> CashDealBody:
+) -> DealBody:
     if kind in {CashRequestKind.DEPOSIT, CashRequestKind.WITHDRAWAL}:
         if command.amount is None:
             raise DealValidationError("Cash amount must be greater than zero")

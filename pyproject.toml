@@ -55,6 +55,11 @@ asyncio_default_test_loop_scope = "session"
 
 [tool.mypy]
 python_version = "3.11"
+files = [
+    "api", "app", "db_asyncpg", "domain", "gutils", "handlers", "keyboards",
+    "middlewares", "models", "observability", "services", "telegram_adapters",
+    "bot_app.py", "config.py", "main.py",
+]
 # Soft mode for the initial rollout. Tighten per-layer (e.g. db_asyncpg, services)
 # toward `disallow_untyped_defs` / `strict` once each layer is clean.
 ignore_missing_imports = true

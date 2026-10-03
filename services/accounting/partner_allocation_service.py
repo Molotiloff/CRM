@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 
-from domain import Deal, DomainStateError, DomainValidationError, validate_partner_allocations
+from domain import (
+    Deal,
+    DealBody,
+    DomainStateError,
+    DomainValidationError,
+    validate_partner_allocations,
+)
 from services.crm.deal_service import DealCreateCommand
 from services.unit_of_work import UnitOfWorkFactory
 
@@ -41,7 +47,8 @@ class PartnerPurchaseAllocationService:
             raise DomainValidationError("Partner purchase idempotency key is required")
         if str(command.deal_type) != "purchase":
             raise DomainValidationError("Partner purchase must use purchase deal type")
-        qty, rate, currency = self._purchase_values(command.body.to_dict())
+        body = command.body.to_dict() if isinstance(command.body, DealBody) else dict(command.body)
+        qty, rate, currency = self._purchase_values(body)
         if currency != "USDT":
             raise DomainValidationError("Partner allocation currently supports USDT purchases")
         async with self._unit_of_work_factory() as unit_of_work:

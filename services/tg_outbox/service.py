@@ -244,7 +244,7 @@ def _append_target(
 
 
 def _int_or_none(value: object) -> int | None:
-    return int(value) if value is not None else None
+    return int(str(value)) if value is not None else None
 
 
 def _mapping(value: object) -> dict[str, Any]:

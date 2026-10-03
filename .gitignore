@@ -49,7 +49,6 @@ google-service-account*.json
 /docs/
 /refactoring.md
 /CRM.pdf
-/requirements-dev.txt
 /workflow.md
 /workflow_crm.md
 /main_menu_workflow.md

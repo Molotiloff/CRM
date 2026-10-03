@@ -334,10 +334,16 @@ class DealService:
         status_command = command
         if self._status_policy is not None:
             current = await self.get_deal(deal_id)
+            status = DealStatus(command.status)
+            payload = (
+                command.payload
+                if isinstance(command.payload, DealEventPayload)
+                else DealEventPayload(command.payload)
+            )
             prepared = await self._status_policy.prepare(
                 current,
-                new_status=command.status,
-                payload=command.payload,
+                new_status=status,
+                payload=payload,
             )
             status_command = DealStatusCommand(
                 status=command.status,
@@ -348,13 +354,17 @@ class DealService:
                 payment_watch_id=prepared.payment_watch_id,
                 tronscan_url=prepared.tronscan_url,
             )
-            if current.status is command.status:
+            if current.status is status:
                 if not prepared.body_patch and not prepared.tronscan_url:
                     return current
                 deal = await self.update_deal(
                     deal_id,
                     DealUpdateCommand(
-                        body=current.body.merged(prepared.body_patch.to_dict()),
+                        body=current.body.merged(
+                            prepared.body_patch.to_dict()
+                            if isinstance(prepared.body_patch, DealBody)
+                            else prepared.body_patch
+                        ),
                         tronscan_url=(prepared.tronscan_url if prepared.tronscan_url else UNSET),
                     ),
                 )
@@ -368,7 +378,14 @@ class DealService:
             await self._publish(
                 "deal.status_changed",
                 deal,
-                {"status": str(command.status), **status_command.payload.to_dict()},
+                {
+                    "status": str(command.status),
+                    **(
+                        status_command.payload.to_dict()
+                        if isinstance(status_command.payload, DealEventPayload)
+                        else dict(status_command.payload)
+                    ),
+                },
             )
             log.info(
                 "Deal status changed",

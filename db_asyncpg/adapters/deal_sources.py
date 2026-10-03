@@ -139,7 +139,7 @@ def _required_text(value: object, field: str) -> str:
 
 def _required_int(value: object, field: str) -> int:
     try:
-        return int(value)
+        return int(str(value))
     except (TypeError, ValueError):
         raise DomainValidationError(f"Missing {field}") from None
 

@@ -7,12 +7,7 @@ from io import BytesIO
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-try:
-    from PIL import Image, ImageDraw, ImageFont
-except ModuleNotFoundError:  # pragma: no cover - optional runtime dependency
-    Image = None
-    ImageDraw = None
-    ImageFont = None
+from PIL import Image, ImageDraw, ImageFont
 
 from services.number_formatting import format_amount_core
 
@@ -33,9 +28,7 @@ def format_receipt_datetime(value: datetime | None) -> str:
     return f"{local.day} {_MONTHS[local.month]} {local.year} {local:%H:%M}"
 
 
-def _pick_font(size: int, *, bold: bool = False) -> ImageFont.ImageFont:
-    if ImageFont is None:
-        raise RuntimeError("Pillow is not installed")
+def _pick_font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = (
         (
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -82,8 +75,6 @@ class ReceiptImageBuilder:
         precision: int,
         rows: tuple[ReceiptRow, ...],
     ) -> bytes:
-        if Image is None or ImageDraw is None or ImageFont is None:
-            raise RuntimeError("Pillow is not installed")
         if not rows:
             raise ValueError("Receipt must contain at least one row")
 
@@ -131,8 +122,6 @@ class ReceiptImageBuilder:
         return output.getvalue()
 
     def _add_logo_watermark(self, image: Image.Image) -> None:
-        if Image is None:
-            raise RuntimeError("Pillow is not installed")
         with Image.open(_LOGO_PATH) as source:
             scale = self.width * 1.08 / source.width
             size = (round(source.width * scale), round(source.height * scale))
@@ -147,13 +136,13 @@ class ReceiptImageBuilder:
         )
 
     @staticmethod
-    def _text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
+    def _text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont | ImageFont.ImageFont) -> int:
         box = draw.textbbox((0, 0), text, font=font)
-        return box[2] - box[0]
+        return int(box[2] - box[0])
 
     def _fitted_font(
         self, draw: ImageDraw.ImageDraw, text: str, *, start: int, minimum: int, max_width: int
-    ) -> ImageFont.ImageFont:
+    ) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         for size in range(start, minimum - 1, -2):
             font = _pick_font(size, bold=True)
             if self._text_width(draw, text, font) <= max_width:
@@ -161,7 +150,7 @@ class ReceiptImageBuilder:
         return _pick_font(minimum, bold=True)
 
     def _wrap(
-        self, draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int
+        self, draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont | ImageFont.ImageFont, max_width: int
     ) -> tuple[str, ...]:
         lines: list[str] = []
         remaining = text

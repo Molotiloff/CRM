@@ -615,18 +615,18 @@ async def edit_deal_source(
             actor_name=user.display_name,
         )
     else:
-        item = payload.cash
-        assert item is not None
+        cash_item = payload.cash
+        assert cash_item is not None
         row = await service.edit_cash(
             deal_id,
             CashSourceEdit(
-                city=item.city,
-                amount=item.amount,
-                in_amount=item.inAmount,
-                out_amount=item.outAmount,
-                comment=item.comment,
-                contact1=item.contact1,
-                contact2=item.contact2,
+                city=cash_item.city,
+                amount=cash_item.amount,
+                in_amount=cash_item.inAmount,
+                out_amount=cash_item.outAmount,
+                comment=cash_item.comment,
+                contact1=cash_item.contact1,
+                contact2=cash_item.contact2,
             ),
             actor_name=user.display_name,
         )

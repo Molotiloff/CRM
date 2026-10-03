@@ -60,7 +60,10 @@ class ClientsHandler:
         )
 
     async def _cb_rmclient(self, cq: CallbackQuery) -> None:
-        if self.admin_chat_ids and (not cq.message or cq.message.chat.id not in self.admin_chat_ids):
+        if not isinstance(cq.message, Message):
+            await cq.answer("Сообщение недоступно.", show_alert=True)
+            return
+        if self.admin_chat_ids and cq.message.chat.id not in self.admin_chat_ids:
             await cq.answer("Доступно только в админском чате.", show_alert=True)
             return
 

@@ -6,7 +6,7 @@ import re
 from collections.abc import Iterable, Mapping
 from decimal import Decimal, InvalidOperation
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import (
     BufferedInputFile,
@@ -56,7 +56,20 @@ _RE_PUBLIC_WALLET_CMD = r"(?iu)^/кош(?:@\w+)?(?:\s|$)"
 _RE_CASH_REQUEST_ID = re.compile(r"(?iu)^Б-\d+$")
 _TRANSFER_CURRENCIES = frozenset({"RUB", "USDT", "USD", "USDW", "EUR", "EUR500", "THB"})
 _TRANSFER_RECEIPT_CAPTION = re.compile(r"^Перевод #(\d+)$")
+_UNSET_MARKUP = object()
 log = logging.getLogger("wallets")
+
+
+def _inline_markup(value: object | None) -> InlineKeyboardMarkup | None:
+    if value is None or isinstance(value, InlineKeyboardMarkup):
+        return value
+    raise TypeError(f"Unsupported wallet reply markup: {type(value).__name__}")
+
+
+def _message_bot(message: Message) -> Bot:
+    if message.bot is None:
+        raise RuntimeError("Telegram bot is unavailable for this message")
+    return message.bot
 
 
 class WalletsHandler:
@@ -112,7 +125,7 @@ class WalletsHandler:
         await message.answer(
             result.message_text,
             parse_mode="HTML",
-            reply_markup=result.reply_markup,
+            reply_markup=_inline_markup(result.reply_markup),
         )
 
     async def _cmd_zero_client(self, message: Message) -> None:
@@ -201,7 +214,7 @@ class WalletsHandler:
             chat_id=message.chat.id,
             chat_name=get_chat_name(message),
         )
-        await message.answer(result.message_text, reply_markup=result.reply_markup)
+        await message.answer(result.message_text, reply_markup=_inline_markup(result.reply_markup))
 
     @manager_or_admin_message_required
     async def _cmd_addcur(self, message: Message) -> None:
@@ -603,23 +616,24 @@ class WalletsHandler:
                 return
             if partner_send is not None:
                 wallet_service = self.interaction_service.wallet_service
-                common = {
-                    "chat_id": message.chat.id,
-                    "chat_name": get_chat_name(message),
-                    "code": "USDT",
-                    "source": "partner_chat_command",
-                    "idempotency_key": f"{message.chat.id}:{message.message_id}",
-                }
                 if partner_send.amount is None:
                     await wallet_service.withdraw_all(
-                        **common,
+                        chat_id=message.chat.id,
+                        chat_name=get_chat_name(message),
+                        code="USDT",
                         comment=partner_send.raw_text,
+                        source="partner_chat_command",
+                        idempotency_key=f"{message.chat.id}:{message.message_id}",
                     )
                 else:
                     await wallet_service.apply_external_currency_change(
-                        **common,
+                        chat_id=message.chat.id,
+                        chat_name=get_chat_name(message),
+                        code="USDT",
                         amount=-partner_send.amount,
                         expr=partner_send.raw_text,
+                        source="partner_chat_command",
+                        idempotency_key=f"{message.chat.id}:{message.message_id}",
                     )
                 return
         try:
@@ -692,7 +706,7 @@ class WalletsHandler:
                 try:
                     client_chat_id = await send_cash_settlement_evidence_to_client(
                         repo=self.repo,
-                        bot=message.bot,
+                        bot=_message_bot(message),
                         evidence_messages=evidence_messages,
                         target_chat_id=settled.client_chat_id,
                         target_client_id=settled.client_id,
@@ -720,7 +734,7 @@ class WalletsHandler:
                 try:
                     client_chat_id = await send_cash_settlement_balance_to_client(
                         repo=self.repo,
-                        bot=message.bot,
+                        bot=_message_bot(message),
                         target_chat_id=client_chat_id,
                         target_client_id=settled.client_id,
                         currency_code=settled.currency,
@@ -766,7 +780,7 @@ class WalletsHandler:
         if result.ok and parsed.is_city_cash and parsed.client_name_for_transfer:
             transfer = await city_cash_transfer_to_client(
                 repo=self.repo,
-                bot=message.bot,
+                bot=_message_bot(message),
                 src_message=message,
                 media_store=self.city_cash_media_store,
                 currency_code=parsed.code,
@@ -784,10 +798,15 @@ class WalletsHandler:
                 )
         await self._answer(message, text, reply_markup=result.reply_markup)
 
-    async def _answer(self, message: Message, text: str, **kwargs: object) -> None:
+    async def _answer(
+        self, message: Message, text: str, *, reply_markup: object = _UNSET_MARKUP
+    ) -> None:
         if message.chat.id in self.silent_chat_ids:
             return
-        await message.answer(text, **kwargs)
+        if reply_markup is _UNSET_MARKUP:
+            await message.answer(text)
+        else:
+            await message.answer(text, reply_markup=_inline_markup(reply_markup))
 
     async def _buffer_city_cash_media_group(self, message: Message) -> None:
         if not message.media_group_id or not message.photo:
@@ -808,7 +827,7 @@ class WalletsHandler:
             await cq.answer("Некорректные данные", show_alert=True)
             return
 
-        if not cq.message:
+        if not isinstance(cq.message, Message):
             await cq.answer("Нет чата", show_alert=True)
             return
 
@@ -832,7 +851,7 @@ class WalletsHandler:
             await cq.answer("Некорректные данные", show_alert=True)
             return
 
-        if not cq.message:
+        if not isinstance(cq.message, Message):
             await cq.answer("Нет сообщения", show_alert=True)
             return
 

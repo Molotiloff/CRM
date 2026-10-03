@@ -72,8 +72,8 @@ def build_deal_details(row: Deal) -> DealDetailsResponse:
         statusEvents=[
             DealStatusEventDto(
                 id=str(event.id),
-                oldStatus=event.old_status,
-                newStatus=event.new_status,
+                oldStatus=DealStatus(str(event.old_status)) if event.old_status is not None else None,
+                newStatus=DealStatus(str(event.new_status)),
                 actorName=event.actor_name,
                 createdAt=_iso(event.created_at),
                 comment=event.payload.get("comment"),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, replace
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from typing import TypedDict
 
 from db_asyncpg.ports.workflows import ExchangeCommandRepositoryPort
 from observability import NULL_METRICS, MetricsRecorder
@@ -28,6 +29,23 @@ from services.expression_calculator import CalcError, evaluate
 from services.messaging import MessengerPort, ReplierPort
 from services.number_formatting import format_rate
 from services.unit_of_work import UnitOfWorkFactory
+
+
+class _ExchangeUseCaseOptions(TypedDict):
+    repo: ExchangeCommandRepositoryPort
+    request_chat_id: int | None
+    balance_service: ExchangeBalanceService
+    calculator: ExchangeCalculator
+    text_builder: ExchangeTextBuilder
+    unit_of_work_factory: UnitOfWorkFactory
+    keyboards: ExchangeKeyboardPort
+    act_counter_service: ActCounterService | None
+    deal_registrar: TelegramDealRegistrarPort | None
+    transaction_service: ExchangeTransactionService
+    wallet_presenter: ExchangeWalletPresenter
+    notification_builder: ExchangeNotificationBuilder
+    source_links: ExchangeSourceLinkService
+    metrics: MetricsRecorder
 
 
 @dataclass(slots=True, frozen=True)
@@ -125,7 +143,7 @@ class AcceptShortService:
         )
         if source_links is None:
             raise ValueError("source_links is required")
-        common = {
+        common: _ExchangeUseCaseOptions = {
             "repo": repo,
             "request_chat_id": request_chat_id,
             "balance_service": balance_service,

@@ -6,16 +6,23 @@ from typing import Concatenate, ParamSpec, Protocol, TypeVar
 
 from aiogram.types import CallbackQuery, Message
 
-from db_asyncpg.ports.administration import ManagerRepositoryPort
-
 P = ParamSpec("P")
 R = TypeVar("R")
 
 
+class _ManagerLookup(Protocol):
+    async def is_manager(self, user_id: int) -> bool: ...
+
+
 class _ManagerAuthContext(Protocol):
-    repo: ManagerRepositoryPort
-    admin_chat_ids: Iterable[int]
-    admin_user_ids: Iterable[int]
+    @property
+    def repo(self) -> _ManagerLookup: ...
+
+    @property
+    def admin_chat_ids(self) -> Iterable[int]: ...
+
+    @property
+    def admin_user_ids(self) -> Iterable[int]: ...
 
 
 # Bound to the auth-context protocol so the decorators preserve each handler's
@@ -34,7 +41,7 @@ def _is_reply_to_public_wallet_message(message: Message) -> bool:
 
 
 async def require_manager_or_admin_message(
-        repo: ManagerRepositoryPort,
+        repo: _ManagerLookup,
         message: Message,
         *,
         admin_chat_ids: Iterable[int],
@@ -70,7 +77,7 @@ async def require_manager_or_admin_message(
 
 
 async def require_manager_or_admin_callback(
-        repo: ManagerRepositoryPort,
+        repo: _ManagerLookup,
         cq: CallbackQuery,
         *,
         admin_chat_ids: Iterable[int],

@@ -124,4 +124,5 @@ class TelegramDealMessageBuilder:
 
 
 def _precision(value: Decimal) -> int:
-    return max(0, min(8, -value.as_tuple().exponent))
+    exponent = value.as_tuple().exponent
+    return max(0, min(8, -exponent)) if isinstance(exponent, int) else 0
