@@ -1,0 +1,7 @@
+# Dev / CI tooling (linter + type checker + tests).
+# Runtime dependencies live in requirements.txt.
+ruff==0.12.0
+mypy==1.13.0
+pytest==9.1.1
+pytest-asyncio==1.4.0
+types-requests==2.33.0.20260906
