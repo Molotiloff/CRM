@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from api.telegram_links import normalize_telegram_invite_link
-from db_asyncpg.repositories.client_invite_links import ClientInviteTarget
+from db_asyncpg.ports.administration import ClientInviteLinkRepository as ClientInviteLinkRepository
+from db_asyncpg.ports.administration import ClientInviteTarget
 from services.lifecycle import ManagedTaskLifecycle
 
 log = logging.getLogger(__name__)
@@ -32,14 +33,6 @@ class ClientInviteLinkGateway(Protocol):
     async def get_chat_info(self, chat_id: int) -> ClientChatLinkInfo: ...
 
     async def create_approval_link(self, chat_id: int) -> str: ...
-
-
-class ClientInviteLinkRepository(Protocol):
-    async def list_missing(
-        self, *, after_client_id: int, limit: int
-    ) -> list[ClientInviteTarget]: ...
-
-    async def save_if_missing(self, target: ClientInviteTarget, link: str) -> bool: ...
 
 
 class ClientInviteLinkBackfill(ManagedTaskLifecycle):

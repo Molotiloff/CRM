@@ -27,7 +27,7 @@ class MediaStoragePort(Protocol):
     def open(self, *, key: str) -> AbstractAsyncContextManager[BinaryIO]: ...
 
 
-class LocalMediaStorage:
+class LocalMediaStorage(MediaStoragePort):
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -80,4 +80,3 @@ class LocalMediaStorage:
     def _flush(output: BinaryIO) -> None:
         output.flush()
         os.fsync(output.fileno())
-

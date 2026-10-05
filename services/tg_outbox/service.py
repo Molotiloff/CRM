@@ -2,29 +2,18 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from typing import Any, Protocol
+from typing import Any
 
-from db_asyncpg.repositories.tg_outbox import TgOutboxItem
+from db_asyncpg.ports.workflows import (
+    TgOutboxDeliveryRepositoryPort as TgOutboxDeliveryRepositoryPort,
+)
+from db_asyncpg.ports.workflows import TgOutboxItem
 from observability import bind_log_context
 from services.messaging import MessengerError, MessengerPort
 
 from .message_builder import TelegramDealMessageBuilder
 
 log = logging.getLogger(__name__)
-
-
-class TgOutboxDeliveryRepositoryPort(Protocol):
-    async def get_deal_delivery_context(self, deal_id: int) -> dict[str, Any] | None: ...
-
-    async def find_archived_deal_status_message(
-        self, chat_id: int, request_id: str
-    ) -> int | None: ...
-
-    async def get_deal_status_message(self, deal_id: int, chat_id: int) -> int | None: ...
-
-    async def save_deal_status_message(
-        self, deal_id: int, chat_id: int, message_id: int
-    ) -> None: ...
 
 
 class DealTelegramSyncService:

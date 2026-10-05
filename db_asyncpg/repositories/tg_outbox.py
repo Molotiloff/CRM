@@ -1,23 +1,14 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 
+from db_asyncpg.ports.workflows import TgOutboxDeliveryRepositoryPort, TgOutboxRepositoryPort
+from db_asyncpg.ports.workflows import TgOutboxItem as TgOutboxItem
 from db_asyncpg.repositories.base import ConnectionBoundRepo
 
 
-@dataclass(frozen=True, slots=True)
-class TgOutboxItem:
-    id: int
-    kind: str
-    payload: dict[str, Any]
-    attempts: int
-    created_at: datetime
-
-
-class TgOutboxRepository(ConnectionBoundRepo):
+class TgOutboxRepository(ConnectionBoundRepo, TgOutboxRepositoryPort, TgOutboxDeliveryRepositoryPort):
     async def find_archived_deal_status_message(
         self, chat_id: int, request_id: str
     ) -> int | None:

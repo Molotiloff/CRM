@@ -147,7 +147,6 @@ def setup_handlers(
 
     request_chat_id = config.request_chat_id
     city_cash_chats = config.city_cash_chat_map
-    ignore_chat_ids = set(ignore_chat_ids or [])
     silent_accounting_chat_ids = {
         int(chat_id)
         for chat_id in (config.moscow_poets_chat_id, config.moscow_bs_chat_id)
@@ -392,8 +391,8 @@ def setup_handlers(
     if silent_accounting_chat_ids:
         silent_accounting_middleware = SilentAccountingChatsMiddleware(
             silent_accounting_chat_ids,
-            start_handler=start_handler._on_start,
-            wallet_change_handler=wallets_handler._on_currency_change,
+            start_handler=start_handler.on_start,
+            wallet_change_handler=wallets_handler.on_currency_change,
         )
         dp.message.outer_middleware(silent_accounting_middleware)
         dp.callback_query.outer_middleware(silent_accounting_middleware)

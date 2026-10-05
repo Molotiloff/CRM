@@ -10,12 +10,13 @@ from aiogram.exceptions import (
     TelegramServerError,
 )
 
+from services.rate_order.live_message_port import LiveMessageEditorPort
 from services.rate_order.models import LiveMessageEditResult, LiveMessageEditStatus
 
 log = logging.getLogger("orderbook_service")
 
 
-class AiogramOrderbookLiveMessageEditor:
+class AiogramOrderbookLiveMessageEditor(LiveMessageEditorPort):
     def __init__(self, *, bot: Bot) -> None:
         self.bot = bot
 

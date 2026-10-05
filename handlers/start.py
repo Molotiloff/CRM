@@ -75,6 +75,10 @@ class StartHandler:
         self.router = Router()
         self._register()
 
+    async def on_start(self, message: Message) -> None:
+        """Handle start from router or silent-accounting middleware."""
+        await self._on_start(message)
+
     async def _on_start(self, message: Message) -> None:
         # регистрируем/обновляем клиента (чат) в БД
         chat_id = message.chat.id

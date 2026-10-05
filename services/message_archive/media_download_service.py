@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
+from services.message_archive.archive_service import AttachmentSchedulerPort
 from services.message_archive.media_storage import MediaStoragePort
 from services.message_archive.models import SavedAttachment, SaveMessageResult
 from services.message_archive.ports import MessageArchiveRepositoryPort
@@ -30,7 +31,7 @@ class _DownloadJob:
     source_root: str | None = None
 
 
-class MediaDownloadService:
+class MediaDownloadService(AttachmentSchedulerPort):
     def __init__(
         self,
         *,

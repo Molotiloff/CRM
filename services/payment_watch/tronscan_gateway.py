@@ -11,6 +11,7 @@ import httpx
 
 from services.http_policy import HttpRetryPolicy, HttpTimeoutPolicy
 from services.payment_watch.models import TronTransfer
+from services.tron_balance_port import TronBalanceProvider
 
 log = logging.getLogger("payment_watch")
 
@@ -26,7 +27,7 @@ class TronscanSettings:
     usdt_contract: str = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 
 
-class TronscanGateway:
+class TronscanGateway(TronBalanceProvider):
     # Лимиты Tronscan с API-ключом: 5 запросов/сек на ключ, 100k запросов/день
     # на аккаунт. Интервал 0.4 c (= 2.5 req/s) держит двукратный запас по секундным
     # окнам; 429/5xx дополнительно ретраятся с экспоненциальным backoff.

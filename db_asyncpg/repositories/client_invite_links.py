@@ -1,17 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from db_asyncpg.ports.administration import ClientInviteLinkRepository
+from db_asyncpg.ports.administration import ClientInviteTarget as ClientInviteTarget
 
 from .base import ConnectionBoundRepo
 
 
-@dataclass(frozen=True, slots=True)
-class ClientInviteTarget:
-    client_id: int
-    chat_id: int
-
-
-class ClientInviteLinkRepo(ConnectionBoundRepo):
+class ClientInviteLinkRepo(ConnectionBoundRepo, ClientInviteLinkRepository):
     async def list_missing(
         self, *, after_client_id: int, limit: int
     ) -> list[ClientInviteTarget]:

@@ -4,24 +4,19 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from decimal import Decimal
-from typing import Protocol
 
 from observability import NULL_METRICS, MetricsRecorder, measured_operation
 from services.aml.checker import AMLCheckResult, AsyncAMLChecker
 from services.aml.getblock_parser import build_report_message
 from services.aml.models import AMLCheckRequest
 from services.lifecycle import ManagedTaskLifecycle
+from services.tron_balance_port import TronBalanceProvider as TronBalanceProvider
 
 log = logging.getLogger("aml_queue")
 
 
 class AMLQueueFullError(RuntimeError):
     pass
-
-
-class TronBalanceProvider(Protocol):
-    async def get_usdt_balance(self, *, address: str) -> Decimal: ...
 
 
 @dataclass(slots=True)

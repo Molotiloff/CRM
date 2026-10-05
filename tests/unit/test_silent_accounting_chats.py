@@ -88,7 +88,7 @@ async def test_start_registers_silent_chat_without_answer() -> None:
         answer=AsyncMock(),
     )
 
-    await handler._on_start(message)
+    await handler.on_start(message)
 
     bootstrap.ensure_client_wallet.assert_awaited_once_with(
         chat_id=-200,
@@ -159,7 +159,7 @@ async def test_wallet_change_posts_silently() -> None:
         answer=AsyncMock(),
     )
 
-    await handler._on_currency_change(message)
+    await handler.on_currency_change(message)
 
     interaction.build_currency_change_response.assert_awaited_once()
     message.answer.assert_not_awaited()
@@ -199,7 +199,7 @@ async def test_partner_manager_can_silently_post_usdt_send() -> None:
         answer=AsyncMock(),
     )
 
-    await handler._on_currency_change(message)
+    await handler.on_currency_change(message)
 
     repo.is_manager.assert_not_awaited()
     interaction.wallet_service.apply_external_currency_change.assert_awaited_once_with(
@@ -246,7 +246,7 @@ async def test_partner_send_all_delegates_to_wallet_zeroing() -> None:
         answer=AsyncMock(),
     )
 
-    await handler._on_currency_change(message)
+    await handler.on_currency_change(message)
 
     interaction.wallet_service.withdraw_all.assert_awaited_once_with(
         chat_id=-200,

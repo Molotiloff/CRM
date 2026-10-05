@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Protocol
 
-from db_asyncpg.repositories.tg_outbox import TgOutboxItem
+from db_asyncpg.ports.workflows import TgOutboxRepositoryPort as TgOutboxRepositoryPort
 from observability import (
     NULL_METRICS,
     MetricsRecorder,
@@ -16,29 +15,6 @@ from services.lifecycle import ManagedTaskLifecycle
 from .service import DealTelegramSyncService
 
 log = logging.getLogger(__name__)
-
-
-class TgOutboxRepositoryPort(Protocol):
-    async def claim_batch(
-        self,
-        *,
-        limit: int,
-        max_attempts: int,
-        lock_timeout_seconds: int,
-    ) -> list[TgOutboxItem]: ...
-
-    async def mark_sent(self, outbox_id: int) -> None: ...
-
-    async def mark_failed(
-        self,
-        outbox_id: int,
-        *,
-        error: str,
-        retry: bool,
-        retry_delay_seconds: int,
-    ) -> None: ...
-
-    async def count_pending(self, *, max_attempts: int) -> int: ...
 
 
 class TgOutboxWorker(ManagedTaskLifecycle):

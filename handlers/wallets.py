@@ -553,6 +553,10 @@ class WalletsHandler:
         await cq.message.edit_reply_markup(reply_markup=None)
         await cq.answer()
 
+    async def on_currency_change(self, message: Message) -> None:
+        """Handle wallet commands from router or silent-accounting middleware."""
+        await self._on_currency_change(message)
+
     async def _on_currency_change(self, message: Message) -> None:
         if message.from_user and message.bot and message.from_user.id == message.bot.id:
             return

@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.datastructures import State
 
 from app.container import ApplicationContainer
 from config import Config
@@ -14,11 +15,17 @@ from .exception_handlers import register_exception_handlers
 from .routers import auth, balances, clients, dashboard, deals, fulfillments, health, manual_cash
 
 
+class CRMFastAPI(FastAPI):
+    """Declare Starlette's instance state explicitly for IDE type inspection."""
+
+    state: State
+
+
 def create_api_app(
     config: Config,
     *,
     container: ApplicationContainer,
-) -> FastAPI:
+) -> CRMFastAPI:
     crm_repositories = container.crm_repositories
     crm_services = container.crm
 
@@ -27,7 +34,7 @@ def create_api_app(
         await crm_repositories.users.seed_from_managers(config.admin_ids)
         yield
 
-    app = FastAPI(title="SkyEX CRM API", version="0.1.0", lifespan=lifespan)
+    app = CRMFastAPI(title="SkyEX CRM API", version="0.1.0", lifespan=lifespan)
     app.state.config = config
     app.state.container = container
     app.state.user_repository = crm_repositories.users

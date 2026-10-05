@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import time
 
-from services.aml.checker import AMLCheckResult
+from services.aml.checker import AMLCheckResult, SyncAMLChecker
 from services.aml.getblock_client import GetBlockAMLClient
 from services.aml.getblock_parser import (
     build_report_message,
@@ -14,7 +14,7 @@ from services.aml.getblock_settings import GetBlockSettings
 from services.aml.models import AMLCheckRequest
 
 
-class AMLService:
+class AMLService(SyncAMLChecker):
     _REPORT_PARSE_ATTEMPTS = 60
     _REPORT_PARSE_DELAY_SECONDS = 3.0
 
