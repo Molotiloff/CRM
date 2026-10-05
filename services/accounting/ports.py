@@ -172,6 +172,10 @@ class CashChatRegistryRepositoryPort(Protocol):
 
 
 class CashSettlementRepositoryPort(Protocol):
+    async def get_cash_balance_for_update(
+        self, *, client_id: int, currency: str,
+    ) -> Decimal | None: ...
+
     async def acquire_request_lock(self, *, request_id: str) -> None: ...
 
     async def get_request_for_update(

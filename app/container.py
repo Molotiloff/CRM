@@ -309,7 +309,6 @@ class ApplicationContainer:
         firm_positions = FirmPositionAccountingService(unit_of_work_factory)
         cash_settlements = CashSettlementService(
             unit_of_work_factory,
-            position_service=firm_positions,
         )
         cash_status_workflow = CashDealStatusWorkflow(
             router_service=request_router,

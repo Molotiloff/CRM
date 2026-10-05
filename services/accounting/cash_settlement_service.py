@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
 from decimal import Decimal
 
 from domain import DealStatus, DomainStateError, DomainValidationError
-from services.accounting.firm_position_service import FirmPositionAccountingService
-from services.accounting.models import RecordSale
 from services.crm.deal_service import DealStatusCommand
 from services.unit_of_work import UnitOfWorkFactory
 
@@ -22,23 +19,11 @@ class CashSettlementError(DomainStateError):
 
 
 class CashSettlementService:
-    _POSITION_CURRENCY = {
-        "USD": "USD_BL",
-        "USDW": "USD_WH",
-        "EUR": "EUR",
-        "USDT": "USDT",
-    }
-
     def __init__(
         self,
         unit_of_work_factory: UnitOfWorkFactory,
-        *,
-        position_service: FirmPositionAccountingService | None = None,
     ) -> None:
         self._unit_of_work_factory = unit_of_work_factory
-        self._positions = position_service or FirmPositionAccountingService(
-            unit_of_work_factory
-        )
 
     async def mark_ready(
         self,
@@ -163,6 +148,17 @@ class CashSettlementService:
                 )
             self._validate_command(context, currency=currency, signed_qty=signed_qty)
             actual_qty = abs(signed_qty)
+            if context.request_kind == "wd":
+                cash_balance = await repository.get_cash_balance_for_update(
+                    client_id=context.cash_client_id, currency=currency,
+                )
+                if cash_balance is None:
+                    raise CashSettlementError(f"В кассе нет активного счёта {currency}.")
+                if actual_qty > cash_balance:
+                    raise CashSettlementError(
+                        f"Недостаточно {currency} в кассе: остаток {cash_balance}, "
+                        f"к выдаче {actual_qty}."
+                    )
             operation = (
                 unit_of_work.transactions.deposit
                 if context.request_kind == "dep"
@@ -187,29 +183,13 @@ class CashSettlementService:
                     idempotency_key=f"cash_settlement:{request_id}:client",
                 )
 
-            position_move_id = None
-            position_currency = self._POSITION_CURRENCY.get(currency)
-            if context.request_kind == "wd" and position_currency is not None:
-                move = await self._positions.record_sale(
-                    RecordSale(
-                        currency=position_currency,
-                        qty=actual_qty,
-                        deal_id=context.deal_id,
-                        actor_user_id=None,
-                        effective_at=datetime.now(UTC),
-                        idempotency_key=f"cash_settlement:{request_id}:position",
-                    ),
-                    unit_of_work=unit_of_work,
-                )
-                position_move_id = move.id
-
             result = await repository.insert(
                 context=context,
                 command=command,
                 actual_qty=actual_qty,
                 cash_transaction_id=cash_transaction_id,
                 client_transaction_id=client_transaction_id,
-                position_move_id=position_move_id,
+                position_move_id=None,
             )
             await unit_of_work.request_schedule.deactivate_request_schedule_entry(
                 request_id

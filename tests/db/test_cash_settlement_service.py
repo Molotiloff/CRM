@@ -15,8 +15,6 @@ from services.accounting.cash_settlement_service import (
     CashSettlementError,
     CashSettlementService,
 )
-from services.accounting.firm_position_service import FirmPositionAccountingService
-from services.accounting.models import RecordOpening
 from services.crm.deal_service import DealCreateCommand
 from tests.db.conftest import balance_of
 
@@ -80,7 +78,7 @@ async def test_office_deposit_updates_cash_and_client_without_position(
         ) == 2
 
 
-async def test_office_withdrawal_updates_three_ledgers_at_average_entry(
+async def test_office_withdrawal_succeeds_without_firm_position(
     pool, repo, client_id
 ) -> None:
     await repo.add_currency(client_id, "USD", 2)
@@ -99,41 +97,23 @@ async def test_office_withdrawal_updates_three_ledgers_at_average_entry(
         source="test",
         idempotency_key="withdrawal-cash-opening",
     )
-    deal_id = await _deal(
+    await _deal(
         pool,
         client_id=client_id,
         request_id="Б-100002",
         kind="wd",
         amount=Decimal("125"),
     )
-    positions = FirmPositionAccountingService(partial(AsyncpgUnitOfWork, pool))
-    await positions.record_opening(
-        RecordOpening(
-            currency="USD_BL",
-            qty=Decimal("125"),
-            rub_cost=Decimal("11250"),
-            reason="office withdrawal opening",
-            idempotency_key="withdrawal-position-opening",
-        )
-    )
-    service = CashSettlementService(
-        partial(AsyncpgUnitOfWork, pool),
-        position_service=positions,
-    )
+    service = _service(pool)
     await service.mark_ready(request_id="Б-100002", actor_tg_user_id=77)
 
     result = await service.settle(_command("Б-100002", Decimal("-125")))
 
     assert await balance_of(repo, client_id, "USD") == 0
     assert await balance_of(repo, cash_client_id, "USD") == 0
-    assert (await positions.position("USD_BL")).qty == 0
+    assert result.position_move_id is None
     async with pool.acquire() as connection:
-        move = await connection.fetchrow(
-            "SELECT entry_rate, deal_id FROM firm_position_moves WHERE id = $1",
-            result.position_move_id,
-        )
-    assert move["entry_rate"] == Decimal("90")
-    assert move["deal_id"] == deal_id
+        assert await connection.fetchval("SELECT COUNT(*) FROM firm_position_moves") == 0
 
 
 async def test_duplicate_command_is_idempotent(pool, repo, client_id) -> None:
@@ -260,8 +240,8 @@ async def test_failure_on_client_leg_rolls_back_cash_leg(
         assert await connection.fetchval("SELECT COUNT(*) FROM cash_settlements") == 0
 
 
-async def test_failure_on_position_leg_rolls_back_both_balances(
-    pool, repo, client_id, monkeypatch
+async def test_insufficient_cash_leaves_both_balances_unchanged(
+    pool, repo, client_id
 ) -> None:
     await repo.add_currency(client_id, "USD", 2)
     await repo.deposit(
@@ -275,7 +255,7 @@ async def test_failure_on_position_leg_rolls_back_both_balances(
     await repo.deposit(
         client_id=cash_client_id,
         currency_code="USD",
-        amount=Decimal("125"),
+        amount=Decimal("124"),
         source="test",
         idempotency_key="position-failure-cash-opening",
     )
@@ -289,15 +269,11 @@ async def test_failure_on_position_leg_rolls_back_both_balances(
     service = _service(pool)
     await service.mark_ready(request_id="Б-100006", actor_tg_user_id=77)
 
-    async def fail_position(*args, **kwargs):
-        raise RuntimeError("position unavailable")
-
-    monkeypatch.setattr(FirmPositionAccountingService, "record_sale", fail_position)
-    with pytest.raises(RuntimeError, match="position unavailable"):
+    with pytest.raises(CashSettlementError, match="Недостаточно USD в кассе"):
         await service.settle(_command("Б-100006", Decimal("-125")))
 
     assert await balance_of(repo, client_id, "USD") == Decimal("125")
-    assert await balance_of(repo, cash_client_id, "USD") == Decimal("125")
+    assert await balance_of(repo, cash_client_id, "USD") == Decimal("124")
     async with pool.acquire() as connection:
         assert await connection.fetchval("SELECT COUNT(*) FROM cash_settlements") == 0
 

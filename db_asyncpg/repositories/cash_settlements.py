@@ -14,6 +14,18 @@ from .base import ConnectionBoundRepo
 
 
 class CashSettlementRepo(ConnectionBoundRepo):
+    async def get_cash_balance_for_update(
+        self, *, client_id: int, currency: str,
+    ) -> Decimal | None:
+        async with self._connection() as connection:
+            balance = await connection.fetchval(
+                """SELECT balance FROM client_accounts
+                WHERE client_id = $1 AND currency_code = $2 AND is_active
+                FOR UPDATE""",
+                client_id, currency,
+            )
+        return Decimal(str(balance)) if balance is not None else None
+
     async def acquire_request_lock(self, *, request_id: str) -> None:
         async with self._connection() as connection:
             await connection.execute(
