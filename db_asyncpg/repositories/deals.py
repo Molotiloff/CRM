@@ -1,25 +1,85 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 from db_asyncpg.repositories.base import ConnectionBoundRepo
+from db_asyncpg.repositories.transactions import TransactionsRepo
 from domain import Deal, DealBody, DealEventPayload, DomainStateError, DomainValidationError
 from services.crm.deal_service import (
     DealCreateCommand,
     DealListFilter,
+    DealNotFoundError,
     DealStatusCommand,
     DealStatusConflictError,
     DealUpdateCommand,
 )
+from services.crm.referrer_reward import calculate_referrer_reward
 
 
 class DealRepository(ConnectionBoundRepo):
+    async def pay_referrer_spread(
+        self, deal_id: int, *, actor_user_id: int, actor_tg_user_id: int | None,
+        expected_amount: Decimal | None = None, expected_referrer_id: int | None = None,
+    ) -> tuple[Deal, bool]:
+        created = False
+        async with self._connection() as con:
+            async with con.transaction():
+                row = await con.fetchrow("SELECT * FROM deals WHERE id=$1 FOR UPDATE", deal_id)
+                if row is None:
+                    raise DealNotFoundError(f"Deal {deal_id} was not found")
+                body = json.loads(row["body"]) if isinstance(row["body"], str) else dict(row["body"])
+                if row["status"] == "canceled":
+                    raise DomainStateError("Нельзя выплатить спред по отменённой сделке")
+                if row["source_kind"] != "exchange" or row["deal_type"] not in {"sale", "purchase"}:
+                    raise DomainValidationError("Спред КТ доступен только для покупки и продажи")
+                payment = body.get("referrer_spread_payment") or {}
+                if payment.get("status") == "paid":
+                    return await DealRepository(self._pool, connection=con)._require_deal(deal_id), False
+                if payment.get("status") == "reversed":
+                    raise DomainStateError("Спред этой сделки уже возвращён; создайте новую сделку")
+                amount = calculate_referrer_reward(str(row["deal_type"]), body)
+                if amount is None or amount <= 0:
+                    raise DomainValidationError("Укажите КТ и положительный спред с суммой от 0,01 RUB")
+                referrer_id = int(body["referrer_client_id"])
+                if referrer_id == row["client_id"]:
+                    raise DomainValidationError("Клиент и КТ должны быть разными чатами")
+                if (expected_amount is not None and expected_amount != amount) or (
+                    expected_referrer_id is not None and expected_referrer_id != referrer_id
+                ):
+                    raise DomainStateError("Сумма спреда или КТ изменились; обновите страницу и подтвердите заново")
+                active = await con.fetchval("SELECT is_active FROM clients WHERE id=$1 FOR UPDATE", referrer_id)
+                if not active:
+                    raise DomainStateError("Клиент-КТ не найден или неактивен")
+                account = await con.fetchrow(
+                    "SELECT precision FROM client_accounts WHERE client_id=$1 AND currency_code='RUB' AND is_active FOR UPDATE",
+                    referrer_id,
+                )
+                if account is None or int(account["precision"]) < 2:
+                    raise DomainStateError("У КТ должен быть активный счёт RUB с точностью не менее 2")
+                transaction_id = await TransactionsRepo(self._pool, connection=con).deposit(
+                    client_id=referrer_id, currency_code="RUB", amount=amount,
+                    source="crm",
+                    comment=f"Спред КТ по сделке {row['deal_no']}",
+                    idempotency_key=f"deal:{deal_id}:referrer_spread",
+                )
+                body["referrer_spread_payment"] = {
+                    "status": "paid", "client_id": referrer_id, "amount_rub": str(amount),
+                    "transaction_id": transaction_id, "actor_user_id": actor_user_id,
+                    "actor_tg_user_id": actor_tg_user_id,
+                    "paid_at": datetime.now(UTC).isoformat(),
+                }
+                await con.execute("UPDATE deals SET body=$2::jsonb WHERE id=$1", deal_id, json.dumps(body))
+                created = True
+        return await self._require_deal(deal_id), created
+
     async def get_by_exchange_request_id(self, request_id: str) -> Deal | None:
         async with self._connection() as con:
             deal_id = await con.fetchval(
                 """SELECT id FROM deals WHERE source_kind='exchange'
-                   AND exchange_client_req_id=$1 ORDER BY id DESC LIMIT 1""",
+                   AND exchange_client_req_id=$1 ORDER BY id DESC LIMIT 1 FOR UPDATE""",
                 str(request_id),
             )
         return await self.get_deal(int(deal_id)) if deal_id is not None else None
@@ -120,6 +180,8 @@ class DealRepository(ConnectionBoundRepo):
 
     async def get_deal(self, deal_id: int) -> Deal | None:
         async with self._connection() as con:
+            if self._bound_connection is not None:
+                await con.fetchval("SELECT id FROM deals WHERE id=$1 FOR UPDATE", deal_id)
             row = await con.fetchrow(f"{_DEAL_SELECT} WHERE d.id = $1", deal_id)
             if row is None:
                 return None
@@ -257,6 +319,13 @@ class DealRepository(ConnectionBoundRepo):
         values.append(deal_id)
         async with self._connection() as con:
             async with con.transaction():
+                current_body = await con.fetchval("SELECT body FROM deals WHERE id=$1 FOR UPDATE", deal_id)
+                if current_body is not None:
+                    body = json.loads(current_body) if isinstance(current_body, str) else dict(current_body)
+                    if (body.get("referrer_spread_payment") or {}).get("status") == "paid" and (
+                        {"body", "client_id", "counterparty_id"} & changes.keys()
+                    ):
+                        raise DomainStateError("Нельзя менять параметры сделки после выплаты спреда КТ; отмените сделку")
                 updated = await con.fetchrow(
                     f"UPDATE deals SET {', '.join(assignments)} "
                     f"WHERE id = ${len(values)} RETURNING id, source, source_kind, status",
@@ -299,7 +368,7 @@ class DealRepository(ConnectionBoundRepo):
         async with self._connection() as con:
             async with con.transaction():
                 row = await con.fetchrow(
-                    "SELECT status, source, source_kind FROM deals WHERE id = $1 FOR UPDATE", deal_id
+                    "SELECT status, source, source_kind, body, deal_no FROM deals WHERE id = $1 FOR UPDATE", deal_id
                 )
                 if row is None:
                     return None
@@ -310,6 +379,20 @@ class DealRepository(ConnectionBoundRepo):
                     )
                 changed = old_status != new_status
                 if changed:
+                    if new_status == "canceled":
+                        body = json.loads(row["body"]) if isinstance(row["body"], str) else dict(row["body"])
+                        payment = body.get("referrer_spread_payment") or {}
+                        if payment.get("status") == "paid":
+                            reversal_id = await TransactionsRepo(self._pool, connection=con).withdraw(
+                                client_id=int(payment["client_id"]), currency_code="RUB",
+                                amount=Decimal(payment["amount_rub"]), source="crm",
+                                comment=f"Возврат спреда КТ при отмене сделки {row['deal_no']}",
+                                idempotency_key=f"deal:{deal_id}:referrer_spread:reversal",
+                            )
+                            body_patch["referrer_spread_payment"] = {
+                                **payment, "status": "reversed", "reversal_transaction_id": reversal_id,
+                                "reversed_at": datetime.now(UTC).isoformat(),
+                            }
                     if command.payment_watch_id is not None:
                         bound = await con.execute(
                             """

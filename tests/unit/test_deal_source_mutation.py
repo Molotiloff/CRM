@@ -98,6 +98,9 @@ class FakeTransactionalDeals:
         self.update_call = None
         self.status_call = None
 
+    async def get_deal(self, deal_id: int):
+        return await self._owner.get_deal(deal_id)
+
     async def update_deal(self, deal_id: int, command):
         changes = command.to_changes()
         self.update_call = deepcopy(changes)
@@ -242,6 +245,24 @@ def _service(
         ),
     )
     return service, factory, balance
+
+
+async def test_exchange_edit_rejects_paid_spread_before_balance_changes() -> None:
+    deals = FakeDeals()
+    deals.row["body"]["referrer_spread_payment"] = {"status": "paid"}
+    service, factory, balance = _service(deals)
+    with pytest.raises(DealValidationError, match="спреда КТ"):
+        await service.edit_exchange(
+            7,
+            ExchangeSourceEdit(
+                operation_id=501, recv_code="rub", recv_amount=Decimal("13500"),
+                pay_code="usdt", pay_amount=Decimal("150"), rate=Decimal("90"), note="changed",
+            ),
+            actor_name="Manager",
+        )
+    assert balance.edit_call is None
+    assert not factory.created[0].committed
+    assert not deals.published
 
 
 async def test_exchange_cancel_commits_source_and_status_before_event() -> None:

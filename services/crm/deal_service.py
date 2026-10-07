@@ -213,6 +213,10 @@ class DealStatusPolicyPort(Protocol):
 
 
 class DealRepositoryPort(Protocol):
+    async def pay_referrer_spread(
+        self, deal_id: int, *, actor_user_id: int, actor_tg_user_id: int | None,
+        expected_amount: Decimal | None = None, expected_referrer_id: int | None = None,
+    ) -> tuple[Deal, bool]: ...
     async def get_by_exchange_request_id(self, request_id: str) -> Deal | None: ...
     async def get_by_source_ref(self, source_ref: str) -> Deal | None: ...
 
@@ -293,6 +297,19 @@ class DealService:
         self._bind_deal_context(deal)
         await self._publish("deal.created", deal)
         log.info("Deal created", extra={"event": "deal.created"})
+        return deal
+
+    @logged_operation("deal.referrer_spread.pay")
+    async def pay_referrer_spread(
+        self, deal_id: int, *, actor_user_id: int, actor_tg_user_id: int | None,
+        expected_amount: Decimal | None = None, expected_referrer_id: int | None = None,
+    ) -> Deal:
+        deal, created = await self._repository.pay_referrer_spread(
+            deal_id, actor_user_id=actor_user_id, actor_tg_user_id=actor_tg_user_id,
+            expected_amount=expected_amount, expected_referrer_id=expected_referrer_id,
+        )
+        if created:
+            await self._publish("deal.updated", deal)
         return deal
 
     @logged_operation("deal.create_source")

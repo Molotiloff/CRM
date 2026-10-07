@@ -43,6 +43,7 @@ class RequestTableDoneService:
         "USD": "USD BL",
         "USDW": "USD WH",
         "EUR": "EUR",
+        "EUR500": "EUR",
         "USDT": "USDT",
         "THB": "THB",
     }
@@ -194,9 +195,6 @@ class RequestTableDoneService:
         rate = payload.rate
         in_cur_table = self._map_table_currency(in_cur)
         out_cur_table = self._map_table_currency(out_cur)
-
-        if "EUR500" in {in_cur, out_cur} and "RUB" not in {in_cur_table, out_cur_table}:
-            raise SheetsWriteError("EUR500 пока поддерживается в таблице только в паре с RUB")
 
         if in_cur == "USDT" and out_cur not in self._FIAT_CODES:
             await self.sheets_gateway.append_buy_row(

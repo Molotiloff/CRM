@@ -155,6 +155,9 @@ class ExchangeTransactionService:
 
     async def edit(self, command: EditExchangeTransaction) -> EditExchangeTransactionResult:
         async with self._unit_of_work_factory() as unit_of_work:
+            deal = await unit_of_work.deals.get_by_exchange_request_id(command.request_id)
+            if deal is not None and (deal.body.get("referrer_spread_payment") or {}).get("status") == "paid":
+                raise DomainStateError("Нельзя менять заявку после выплаты спреда КТ; отмените сделку")
             movements = await self._balance_service.apply_edit_delta(
                 client_id=command.client_id,
                 old_request_text=command.old_card_text,

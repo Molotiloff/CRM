@@ -25,6 +25,7 @@ from api.schemas.deals import (
     DealType,
     DealUpdateRequest,
     ExchangeDealCreateRequest,
+    ReferrerSpreadPayRequest,
     SettlementResolutionResponse,
     SettlementReviewResolutionRequest,
 )
@@ -242,8 +243,8 @@ async def create_exchange_deal(
         )
     if client is None:
         raise DomainValidationError("Активный клиент не найден")
-    if payload.referrerPercent > 0 and payload.referrerClientId is None:
-        raise DomainValidationError("Для процента КТ выберите чат клиента-КТ")
+    if (payload.referrerPercent > 0 or payload.referrerSpreadRub > 0) and payload.referrerClientId is None:
+        raise DomainValidationError("Для вознаграждения КТ выберите чат клиента-КТ")
     if payload.referrerClientId is not None:
         if payload.referrerClientId == payload.clientId:
             raise DomainValidationError("Клиент и КТ должны быть разными чатами")
@@ -284,6 +285,7 @@ async def create_exchange_deal(
                 city=payload.city,
                 referrer_client_id=payload.referrerClientId,
                 referrer_percent=payload.referrerPercent,
+                referrer_spread_rub=payload.referrerSpreadRub,
             ),
             messenger=container.messenger,
             replier=ClientChatReplier(container.messenger, chat_id),
@@ -443,8 +445,8 @@ async def write_exchange_deal_to_table(
     service: DealService = Depends(get_deal_service),
 ) -> DealDetailsResponse:
     deal = await service.get_deal(deal_id)
-    if str(deal.deal_type) not in {"sale", "purchase"} or str(deal.source_kind) != "exchange":
-        raise DomainValidationError("Кнопка доступна только для обменов покупки и продажи")
+    if str(deal.deal_type) not in {"sale", "purchase", "conversion"} or str(deal.source_kind) != "exchange":
+        raise DomainValidationError("Кнопка доступна только для покупки, продажи и конвертации")
     if str(deal.status) not in {"new", "done"}:
         raise DomainValidationError("Заявка уже перешла в другой статус")
     if not deal.exchange_client_req_id:
@@ -465,6 +467,26 @@ async def write_exchange_deal_to_table(
         actor_user_id=user.id,
     )
     return build_deal_details(await service.get_deal(deal_id))
+
+
+@router.post(
+    "/deals/{deal_id}/referrer-spread",
+    response_model=DealDetailsResponse,
+    responses=error_responses(
+        status.HTTP_400_BAD_REQUEST, status.HTTP_401_UNAUTHORIZED,
+        status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND, status.HTTP_409_CONFLICT,
+    ),
+)
+async def pay_referrer_spread(
+    deal_id: int,
+    payload: ReferrerSpreadPayRequest,
+    user: ApiUser = Depends(require_role(UserRole.manager)),
+    service: DealService = Depends(get_deal_service),
+) -> DealDetailsResponse:
+    return build_deal_details(await service.pay_referrer_spread(
+        deal_id, actor_user_id=user.id, actor_tg_user_id=user.tg_user_id,
+        expected_amount=payload.expectedAmount, expected_referrer_id=payload.referrerClientId,
+    ))
 
 
 @router.patch(

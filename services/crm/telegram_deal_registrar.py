@@ -29,6 +29,7 @@ class ExchangeDealData:
     city: str | None = None
     referrer_client_id: int | None = None
     referrer_percent: Decimal = Decimal("0")
+    referrer_spread_rub: Decimal = Decimal("0")
     recv_is_deposit: bool = True
     pay_is_withdraw: bool = True
 
@@ -102,6 +103,7 @@ class TelegramDealRegistrar:
                 "note": data.comment,
                 "referrer_client_id": data.referrer_client_id,
                 "referrer_percent": str(data.referrer_percent),
+                "referrer_spread_rub": str(data.referrer_spread_rub),
                 "recv_is_deposit": data.recv_is_deposit,
                 "pay_is_withdraw": data.pay_is_withdraw,
             },
