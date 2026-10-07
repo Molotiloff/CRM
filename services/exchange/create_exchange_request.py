@@ -43,6 +43,7 @@ class CreateExchangeParams:
     city: str | None = None
     referrer_client_id: int | None = None
     referrer_percent: Decimal = Decimal("0")
+    referrer_spread_rub: Decimal = Decimal("0")
 
 
 @dataclass(slots=True, frozen=True)
@@ -143,6 +144,7 @@ class CreateExchangeRequest(_ExchangeUseCaseBase):
                 city=params.city,
                 referrer_client_id=params.referrer_client_id,
                 referrer_percent=params.referrer_percent,
+                referrer_spread_rub=params.referrer_spread_rub,
                 recv_is_deposit=params.recv_is_deposit,
                 pay_is_withdraw=params.pay_is_withdraw,
             )

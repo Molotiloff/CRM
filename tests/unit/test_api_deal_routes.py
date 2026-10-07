@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -14,12 +15,135 @@ from api.models import ApiUser, UserRole
 from api.presentation.deals import build_deal_details, build_deals_page
 from api.routers import deals
 from api.schemas.common import ErrorResponse
-from api.schemas.deals import DealDetailsResponse, DealsPageResponse
+from api.schemas.deals import DealDetailsResponse, DealsPageResponse, ExchangeDealCreateRequest
 from domain import Deal, DomainStateError, SettlementReviewStatus
 from domain.accounting_flows import SettlementResolution
 from services.crm.deal_service import DealNotFoundError
 from services.payment_watch.settlement_models import SettlementResult
 from tests.fakes import FakeMessenger
+
+
+@pytest.mark.parametrize("deal_type", ["sale", "purchase"])
+def test_exchange_schema_preserves_decimal_referrer_spread(deal_type) -> None:
+    payload = ExchangeDealCreateRequest.model_validate({
+        "dealType": deal_type, "clientId": 1, "city": "Екб", "recvCode": "RUB",
+        "recvAmount": "150000", "payCode": "USDT", "payAmount": "1704.545",
+        "idempotencyKey": "spread", "referrerClientId": 2, "referrerSpreadRub": "0.10",
+    })
+    assert payload.referrerSpreadRub == Decimal("0.10")
+    assert payload.referrerPercent == 0
+
+
+def test_referrer_spread_route_requires_manager_and_uses_authenticated_actor() -> None:
+    service = FakeDealService()
+    service.pay_referrer_spread = AsyncMock(return_value=Deal.from_record(service.row))
+    response = TestClient(_app(service)).post("/api/v1/deals/1/referrer-spread", json={"expectedAmount": "170.45", "referrerClientId": 2})
+    assert response.status_code == 200
+    service.pay_referrer_spread.assert_awaited_once_with(1, actor_user_id=1, actor_tg_user_id=42, expected_amount=Decimal("170.45"), expected_referrer_id=2)
+    denied = TestClient(_app(service, role=UserRole.cashier)).post("/api/v1/deals/1/referrer-spread", json={"expectedAmount": "170.45", "referrerClientId": 2})
+    assert denied.status_code == 403
+    assert service.pay_referrer_spread.await_count == 1
+
+
+def test_exchange_schema_rejects_negative_referrer_spread() -> None:
+    with pytest.raises(ValueError):
+        ExchangeDealCreateRequest.model_validate({
+            "dealType": "sale", "clientId": 1, "city": "Екб", "recvCode": "RUB",
+            "recvAmount": "150000", "payCode": "USDT", "payAmount": "1704.545",
+            "idempotencyKey": "spread", "referrerSpreadRub": "-0.1",
+        })
+
+
+@pytest.mark.parametrize(("deal_type", "recv_amount", "pay_amount"), [
+    ("sale", "150000", "1704.545"), ("purchase", "1704.545", "150000"),
+])
+def test_referrer_reward_is_displayed_in_rubles_with_kopeks(deal_type, recv_amount, pay_amount) -> None:
+    service = FakeDealService()
+    service.row.update({
+        "deal_type": deal_type,
+        "body": {"recv_amount": recv_amount, "pay_amount": pay_amount,
+                 "referrer_client_id": 2, "referrer_spread_rub": "0.1"},
+    })
+    assert build_deal_details(Deal.from_record(service.row)).referrerRewardRub == 170.45
+    # Old percentage metadata must not silently become a ruble-per-unit spread.
+    service.row["body"] = {"referrer_client_id": 2, "referrer_percent": "0.1", "pay_amount": "1704.545"}
+    assert build_deal_details(Deal.from_record(service.row)).referrerRewardRub is None
+
+
+@pytest.mark.parametrize(("received", "paid"), [("USD", "USDT"), ("USDT", "THB"), ("EUR500", "USDW")])
+def test_conversion_creation_reuses_telegram_exchange_workflow(received, paid) -> None:
+    service = FakeDealService()
+    service.row.update({
+        "deal_type": "conversion", "source_kind": "exchange", "source_ref": "conversion-test",
+        "exchange_client_req_id": "123", "profit": 0,
+        "body": {"recv_code": received, "pay_code": paid, "recv_amount": "10", "pay_amount": "20"},
+    })
+    service.get_source_exchange = AsyncMock(side_effect=[None, Deal.from_record(service.row)])
+    create = AsyncMock(return_value=SimpleNamespace(ok=True, request_chat_posted=True))
+    con = AsyncMock()
+    con.fetchrow.return_value = {"chat_id": -123, "name": "Client"}
+    pool = MagicMock()
+    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=con)
+    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
+    app = _app(service)
+    app.state.container = SimpleNamespace(
+        messenger=FakeMessenger(), config=SimpleNamespace(request_chat_id=-456), pool=pool,
+        exchange=SimpleNamespace(accept_short=SimpleNamespace(create_request=create)),
+    )
+    response = TestClient(app).post("/api/v1/deals/exchanges", json={
+        "dealType": "conversion", "clientId": 1, "city": "Екб",
+        "recvCode": received, "recvAmount": "10", "payCode": paid, "payAmount": "20",
+        "idempotencyKey": "conversion-test",
+    })
+    assert response.status_code == 201, response.text
+    create.assert_awaited_once()
+    params = create.await_args.args[0]
+    assert (params.recv_code, params.pay_code) == (received, paid)
+    assert (params.recv_amount_expr, params.pay_amount_expr) == ("10", "20")
+    assert params.source == "crm"
+    assert response.json()["requestChatPosted"] is True
+    assert response.json()["deal"]["direction"] == f"{received} → {paid}"
+    assert response.json()["deal"]["asset"] == received
+    assert response.json()["deal"]["exchangeAmount"] == f"10 {received} → 20 {paid}"
+    assert response.json()["deal"]["amountRub"] == 0
+
+
+@pytest.mark.parametrize(("received", "paid"), [("USD", "USD"), ("RUB", "USD"), ("USD", "RUB"), ("BTC", "USDT")])
+def test_conversion_rejects_invalid_direction_before_creating_request(received, paid) -> None:
+    response = TestClient(_app(FakeDealService())).post("/api/v1/deals/exchanges", json={
+        "dealType": "conversion", "clientId": 1, "city": "Екб",
+        "recvCode": received, "recvAmount": "10", "payCode": paid, "payAmount": "20",
+        "idempotencyKey": "invalid-conversion",
+    })
+    assert response.status_code == 400
+
+
+def test_conversion_can_be_written_to_table_through_shared_service(monkeypatch) -> None:
+    service = FakeDealService()
+    service.row.update({
+        "deal_type": "conversion", "source_kind": "exchange", "source_ref": "conversion-test",
+        "exchange_client_req_id": "123",
+        "body": {"recv_code": "USD", "pay_code": "USDT", "recv_amount": "10", "pay_amount": "20"},
+    })
+    repo = SimpleNamespace(get_exchange_request_link=AsyncMock(return_value={"table_req_id": "456"}))
+
+    async def finish(**kwargs):
+        assert kwargs["repo"] is repo
+        assert kwargs["deal_service"] is service
+        assert kwargs["table_req_id"] == "456"
+        assert kwargs["actor_user_id"] == 1
+        service.row["status"] = "done"
+
+    write = AsyncMock(side_effect=finish)
+    monkeypatch.setattr(deals.RequestTableDoneService, "write_exchange_request_once", write)
+    app = _app(service)
+    app.state.container = SimpleNamespace(
+        operational_repositories=SimpleNamespace(exchange_requests=repo), sheets_gateway=AsyncMock(),
+    )
+    response = TestClient(app).post("/api/v1/deals/1/table", json={})
+    assert response.status_code == 200, response.text
+    assert response.json()["deal"]["status"] == "done"
+    write.assert_awaited_once()
 
 
 def test_deal_routes_expose_list_create_update_and_status() -> None:

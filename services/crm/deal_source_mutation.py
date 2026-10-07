@@ -60,6 +60,9 @@ class DealSourceMutationService:
         payload = {"comment": comment} if comment else {}
 
         async with self._unit_of_work_factory() as unit_of_work:
+            locked = await unit_of_work.deals.get_deal(deal_id)
+            if locked is None or locked.status != deal.status:
+                raise DealValidationError("Статус сделки изменился, обновите страницу")
             await adapter.cancel(unit_of_work, deal)
             result = await unit_of_work.deals.change_status(
                 deal_id,
@@ -127,6 +130,11 @@ class DealSourceMutationService:
         plan = await adapter.prepare_edit(deal, command, actor_name=actor_name)
 
         async with self._unit_of_work_factory() as unit_of_work:
+            locked = await unit_of_work.deals.get_deal(deal_id)
+            if locked is None or locked.status != deal.status:
+                raise DealValidationError("Статус сделки изменился, обновите страницу")
+            if (locked.body.get("referrer_spread_payment") or {}).get("status") == "paid":
+                raise DealValidationError("Нельзя менять заявку после выплаты спреда КТ; отмените сделку")
             await plan.apply(unit_of_work)
             updated = await unit_of_work.deals.update_deal(
                 deal_id,

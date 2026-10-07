@@ -6,13 +6,14 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
 from db_asyncpg.ports.market import LiveMessageRepositoryPort
+from services.lifecycle import ManagedTaskLifecycle
 from services.rate_order.live_message_port import LiveMessageEditorPort
 from services.rate_order.models import LiveMessageEditStatus
 
 log = logging.getLogger("orderbook_service")
 
 
-class OrderbookService:
+class OrderbookService(ManagedTaskLifecycle):
     LIVE_MESSAGE_KEY = "orderbook_live"
     # Минимальный интервал между правками «живого» сообщения со стаканом.
     # Обновления стакана приходят по WS много раз в секунду; частые edit'ы
@@ -29,7 +30,11 @@ class OrderbookService:
         exchange_name: str = "Биржа",
         symbol_label: str = "USDT/RUB",
         disabled_reason: str | None = None,
+        live_message_key: str = LIVE_MESSAGE_KEY,
     ) -> None:
+        super().__init__(task_name=f"{live_message_key}_publisher")
+        self._refresh_requested = asyncio.Event()
+        self.live_message_key = live_message_key
         self.ws_service = ws_service
         self.repo = repo
         self.live_message_editor = live_message_editor
@@ -53,13 +58,13 @@ class OrderbookService:
         return datetime.now().strftime("%d.%m.%Y %H:%M:%S")
 
     def _title_asks(self) -> str:
-        return f"〽️ Глубина стакана продаж для {self.symbol_label}"
+        return f"〽️ {self.exchange_name} · Глубина стакана продаж для {self.symbol_label}"
 
     def _title_bids(self) -> str:
-        return f"〽️ Глубина стакана покупок для {self.symbol_label}"
+        return f"〽️ {self.exchange_name} · Глубина стакана покупок для {self.symbol_label}"
 
     def _title_bid(self) -> str:
-        return f"〽️ Первый ордер на покупку для {self.symbol_label}"
+        return f"〽️ {self.exchange_name} · Первый ордер на покупку для {self.symbol_label}"
 
     async def set_live_message(self, *, chat_id: int, message_id: int) -> None:
         self._live_chat_id = int(chat_id)
@@ -67,7 +72,7 @@ class OrderbookService:
 
         await self.repo.upsert_live_message(
             chat_id=self._live_chat_id,
-            message_key=self.LIVE_MESSAGE_KEY,
+            message_key=self.live_message_key,
             message_id=self._live_message_id,
         )
 
@@ -75,7 +80,7 @@ class OrderbookService:
         if self._live_chat_id:
             await self.repo.delete_live_message(
                 chat_id=self._live_chat_id,
-                message_key=self.LIVE_MESSAGE_KEY,
+                message_key=self.live_message_key,
             )
 
         self._live_chat_id = None
@@ -87,7 +92,7 @@ class OrderbookService:
 
         row = await self.repo.get_live_message(
             chat_id=int(admin_chat_id),
-            message_key=self.LIVE_MESSAGE_KEY,
+            message_key=self.live_message_key,
         )
 
         if not row:
@@ -279,71 +284,65 @@ class OrderbookService:
             f"Актуально на {updated_at}"
         )
 
+    def request_refresh(self) -> None:
+        """Coalesce updates without blocking the WebSocket reader or spawning tasks."""
+        if self._live_chat_id and self._live_message_id:
+            self._refresh_requested.set()
+
+    async def _run(self) -> None:
+        while not self.is_stopping:
+            await self._refresh_requested.wait()
+            self._refresh_requested.clear()
+            try:
+                await self.refresh_live_message()
+            except Exception:
+                log.exception("Failed to publish %s orderbook", self.exchange_name)
+
+    async def _after_stop(self) -> None:
+        self._refresh_requested.clear()
+        self._pending_refresh = False
+
     async def refresh_live_message(self) -> None:
         if not self._live_chat_id or not self._live_message_id:
             return
-
         if self._refresh_lock.locked():
             self._pending_refresh = True
             return
-
         loop = asyncio.get_running_loop()
-
-        try:
-            async with self._refresh_lock:
-                while self._live_chat_id and self._live_message_id:
-                    self._pending_refresh = False
-
-                    # Троттлинг: не чаще одной правки в MIN_REFRESH_INTERVAL_SECONDS,
-                    # плюс уважаем активный retry_after от Telegram. Ждём под локом —
-                    # параллельные апдейты просто выставят _pending_refresh и выйдут.
-                    now = loop.time()
-                    wait_until = max(
-                        self._retry_after_until,
-                        self._last_edit_at + self.MIN_REFRESH_INTERVAL_SECONDS,
-                    )
-                    if now < wait_until:
-                        await asyncio.sleep(wait_until - now)
-
-                    text = self.build_live_text()
-
-                    result = await self.live_message_editor.edit_text(
-                        chat_id=self._live_chat_id,
-                        message_id=self._live_message_id,
-                        text=text,
-                    )
-
-                    if result.status in {
-                        LiveMessageEditStatus.UPDATED,
-                        LiveMessageEditStatus.UNCHANGED,
-                    }:
-                        self._last_edit_at = loop.time()
-                        return
-
-                    if result.status is LiveMessageEditStatus.RETRY:
-                        retry_after = max(float(result.retry_after_seconds or 0), 1.0)
-                        self._retry_after_until = loop.time() + retry_after
-                        self._pending_refresh = True
-                        log.warning(
-                            "Telegram rate limit while refreshing live message "
-                            "chat_id=%s message_id=%s; retry after %.1fs",
-                            self._live_chat_id,
-                            self._live_message_id,
-                            retry_after,
-                        )
-                        await asyncio.sleep(retry_after)
+        async with self._refresh_lock:
+            while self._live_chat_id and self._live_message_id:
+                self._pending_refresh = False
+                wait_until = max(
+                    self._retry_after_until,
+                    self._last_edit_at + self.MIN_REFRESH_INTERVAL_SECONDS,
+                )
+                if loop.time() < wait_until:
+                    await asyncio.sleep(wait_until - loop.time())
+                # Read the latest book after throttling; intermediate updates need no queue.
+                self._refresh_requested.clear()
+                result = await self.live_message_editor.edit_text(
+                    chat_id=self._live_chat_id,
+                    message_id=self._live_message_id,
+                    text=self.build_live_text(),
+                )
+                if result.status in {
+                    LiveMessageEditStatus.UPDATED,
+                    LiveMessageEditStatus.UNCHANGED,
+                }:
+                    self._last_edit_at = loop.time()
+                    if self._pending_refresh:
                         continue
-
-                    if result.status is LiveMessageEditStatus.MISSING:
-                        await self.clear_live_message()
-                        return
-
-                    log.warning(
-                        "Failed to refresh live message chat_id=%s message_id=%s",
-                        self._live_chat_id,
-                        self._live_message_id,
-                    )
                     return
-        finally:
-            if self._pending_refresh and self._live_chat_id and self._live_message_id:
-                await asyncio.create_task(self.refresh_live_message())
+                if result.status is LiveMessageEditStatus.RETRY:
+                    retry_after = max(float(result.retry_after_seconds or 0), 1.0)
+                    self._retry_after_until = loop.time() + retry_after
+                    log.warning(
+                        "Telegram rate limit for %s; retry after %.1fs",
+                        self.exchange_name, retry_after,
+                    )
+                    continue
+                if result.status is LiveMessageEditStatus.MISSING:
+                    await self.clear_live_message()
+                    return
+                log.warning("Failed to refresh %s live message", self.exchange_name)
+                return

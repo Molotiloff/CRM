@@ -29,9 +29,6 @@ SUBSCRIBE_PAYLOAD = [
     "subscribe",
     [
         "spot@public.depth@USDT_RUB",
-        "spot@public.deals@USDT_RUB",
-        "spot@public.ticker@USDT_RUB",
-        "spot@public.kline@USDT_RUB",
     ],
 ]
 
@@ -46,8 +43,7 @@ class RapiraWsService(ManagedTaskLifecycle):
       - on_best_ask
       - on_orderbook_update
 
-    Это позволит оставить /гар, /гар- и /гарред как есть,
-    просто подменив источник данных на Rapira.
+    Источник стакана для команд /рап, /рапп, /рап- и /рапред.
     """
 
     def __init__(
@@ -200,11 +196,18 @@ class RapiraWsService(ManagedTaskLifecycle):
         await ws.send(payload)
         log.info("Rapira subscribed to USDT_RUB channels")
 
+    def _reset(self) -> None:
+        self.asks.clear()
+        self.bids.clear()
+        self.best_ask = None
+        self.orderbook_observed_at = None
+
     async def _run(self) -> None:
         reconnect_delay = 3
 
         while not self.is_stopping:
             try:
+                self._reset()
                 log.info("Rapira websocket connecting")
 
                 async with websockets.connect(
@@ -217,8 +220,13 @@ class RapiraWsService(ManagedTaskLifecycle):
                     # 'keepalive ping timeout'). Живость держим через engine.io
                     # heartbeat ("2"/"3") + read-timeout на recv (см. RECV_TIMEOUT).
                     ping_interval=None,
+                    # Частые реконнекты Rapira оставляли буферы permessage-deflate
+                    # до сборки мусора; для JSON-потока сжатие не обязательно.
+                    compression=None,
                     close_timeout=10,
                     max_size=4 * 1024 * 1024,
+                    max_queue=4,
+                    open_timeout=15,
                 ) as ws:
                     log.info("Rapira websocket connected")
 
@@ -286,3 +294,6 @@ class RapiraWsService(ManagedTaskLifecycle):
                 if not self.is_stopping:
                     log.info("Rapira websocket reconnecting in %s sec", reconnect_delay)
                     await asyncio.sleep(reconnect_delay)
+
+            finally:
+                self._reset()

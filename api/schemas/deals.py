@@ -75,14 +75,22 @@ class ExchangeDealCreateRequest(BaseModel):
     comment: str | None = None
     referrerClientId: int | None = Field(default=None, gt=0)
     referrerPercent: Decimal = Field(default=Decimal("0"), ge=0, le=100)
+    referrerSpreadRub: Decimal = Field(default=Decimal("0"), ge=0)
 
     @model_validator(mode="after")
     def validate_exchange(self) -> ExchangeDealCreateRequest:
-        if self.dealType not in {DealType.sale, DealType.purchase}:
-            raise ValueError("Only purchase and sale are supported")
+        if self.dealType not in {DealType.sale, DealType.purchase, DealType.conversion}:
+            raise ValueError("Only purchase, sale and conversion are supported")
         if not self.recvAmount.is_finite() or not self.payAmount.is_finite():
             raise ValueError("Amounts must be finite")
+        if self.dealType is DealType.conversion and self.referrerSpreadRub > 0:
+            raise ValueError("Referrer spread is supported only for purchase and sale")
         return self
+
+
+class ReferrerSpreadPayRequest(BaseModel):
+    expectedAmount: Decimal = Field(gt=0)
+    referrerClientId: int = Field(gt=0)
 
 
 class CashDealCreateRequest(BaseModel):
@@ -223,6 +231,7 @@ class DealItemDto(BaseModel):
     direction: str
     amountRub: float
     transferAmount: str | None = None
+    exchangeAmount: str | None = None
     city: str
     status: DealStatus
     insufficientUsdt: bool | None = None
@@ -291,6 +300,7 @@ class DealDetailsResponse(BaseModel):
     requestChatPosted: bool | None = None
     counterpartyName: str | None = None
     counterpartyPercent: float | None = None
+    referrerRewardRub: float | None = None
     profitRub: float
     comment: str | None = None
     tronscanUrl: str | None = None

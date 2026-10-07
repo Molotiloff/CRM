@@ -12,15 +12,17 @@ from services.rate_order import OrderbookService
 from telegram_adapters.auth import manager_or_admin_message_required
 
 
-class GrinexBookHandler:
+class ExchangeMonitorHandler:
     def __init__(
         self,
         repo: ManagerRepositoryPort,
         *,
         orderbook_service: OrderbookService,
+        command_prefix: str,
         admin_chat_ids: Iterable[int] | None = None,
         admin_user_ids: Iterable[int] | None = None,
     ) -> None:
+        self.command_prefix = command_prefix
         self.repo = repo
         self.orderbook_service = orderbook_service
         self.admin_chat_ids = {int(x) for x in (admin_chat_ids or [])}
@@ -32,28 +34,28 @@ class GrinexBookHandler:
         return int(chat_id) in self.admin_chat_ids
 
     @manager_or_admin_message_required
-    async def _cmd_gar(self, message: Message) -> None:
+    async def _cmd_asks(self, message: Message) -> None:
         text = self.orderbook_service.build_asks_depth_text(
             min_total_volume=Decimal("500000"),
         )
         await message.answer(text)
 
     @manager_or_admin_message_required
-    async def _cmd_garp(self, message: Message) -> None:
+    async def _cmd_bids(self, message: Message) -> None:
         text = self.orderbook_service.build_bids_depth_text(
             min_total_volume=Decimal("500000"),
         )
         await message.answer(text)
 
     @manager_or_admin_message_required
-    async def _cmd_gar_minus(self, message: Message) -> None:
+    async def _cmd_first_bid(self, message: Message) -> None:
         text = self.orderbook_service.build_first_bid_text()
         await message.answer(text)
 
     @manager_or_admin_message_required
-    async def _cmd_gar_live(self, message: Message) -> None:
+    async def _cmd_live(self, message: Message) -> None:
         if not self._is_admin_chat(message.chat.id):
-            await message.answer("Команда /гарред доступна только в админском чате.")
+            await message.answer(f"Команда /{self.command_prefix}ред доступна только в админском чате.")
             return
 
         text = self.orderbook_service.build_live_text(
@@ -66,7 +68,7 @@ class GrinexBookHandler:
         )
 
     def _register(self) -> None:
-        self.router.message.register(self._cmd_gar, Command("гар"))
-        self.router.message.register(self._cmd_garp, Command("гарп"))
-        self.router.message.register(self._cmd_gar_minus, Command("гар-"))
-        self.router.message.register(self._cmd_gar_live, Command("гарред"))
+        self.router.message.register(self._cmd_asks, Command(self.command_prefix))
+        self.router.message.register(self._cmd_bids, Command(f"{self.command_prefix}п"))
+        self.router.message.register(self._cmd_first_bid, Command(f"{self.command_prefix}-"))
+        self.router.message.register(self._cmd_live, Command(f"{self.command_prefix}ред"))

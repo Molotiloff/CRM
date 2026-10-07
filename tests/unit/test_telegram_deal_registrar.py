@@ -21,3 +21,19 @@ def test_crm_exchange_keeps_referrer_without_auto_payout() -> None:
     assert command.source == "crm"
     assert command.body.to_dict()["referrer_client_id"] == 2
     assert command.body.to_dict()["referrer_percent"] == "15"
+
+
+def test_exchange_preserves_referrer_spread_as_rubles_per_currency_unit() -> None:
+    registrar = TelegramDealRegistrar(None, default_city="екб")
+    command = registrar.build_exchange_command(ExchangeDealData(
+        source_ref="spread:1", client_id=1, client_req_id="123", table_req_id=456,
+        client_name="Покупатель", creator_name="Менеджер", recv_code="RUB",
+        recv_amount=Decimal("150000"), pay_code="USDT", pay_amount=Decimal("1704.545"),
+        rate=Decimal("88"), source="crm", referrer_client_id=2,
+        referrer_spread_rub=Decimal("0.1"),
+    ))
+    body = command.body.to_dict()
+    assert body["referrer_spread_rub"] == "0.1"
+    assert body["referrer_percent"] == "0"
+    assert body["referrer_client_id"] == 2
+    assert Decimal(body["pay_amount"]) * Decimal(body["referrer_spread_rub"]) == Decimal("170.4545")

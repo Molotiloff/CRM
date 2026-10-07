@@ -65,7 +65,14 @@ class CancelExchangeRequest(_ExchangeUseCaseBase):
 
         meta = await self._get_exchange_request_meta(req_id_s)
         wallet_chat_id = meta.client_message.chat_id if meta and meta.client_message else chat_id
-        if wallet_chat_id == self.request_chat_id:
+        request_chat_origin = bool(
+            meta
+            and meta.client_message
+            and meta.client_message == meta.request_message
+            and meta.client_message == TelegramMessageRef(chat_id, params.card_message_id)
+            and wallet_chat_id == self.request_chat_id
+        )
+        if wallet_chat_id == self.request_chat_id and not request_chat_origin:
             await replier.alert("Не найден чат клиента для отмены заявки")
             return CancelExchangeResult(ok=False, error="client chat missing")
         client_name = params.chat_name if wallet_chat_id == chat_id else ""

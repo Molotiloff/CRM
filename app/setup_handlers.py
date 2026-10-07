@@ -20,7 +20,7 @@ from handlers import (
     CityAssignHandler,
     ClientsBalancesHandler,
     ClientsHandler,
-    GrinexBookHandler,
+    ExchangeMonitorHandler,
     ManagersHandler,
     NonZeroHandler,
     OfficeCardsHandler,
@@ -93,6 +93,7 @@ from services.profit_capitalization_scheduler import (
     setup_profit_capitalization_scheduler,
 )
 from services.rate_order import (
+    AbcexWsService,
     OrderbookService,
     RapiraWsService,
     RateOrderService,
@@ -308,15 +309,38 @@ def setup_handlers(
         symbol_label="USDT/RUB",
     )
 
-    services.market_ws_service.on_orderbook_update = services.orderbook_service.refresh_live_message
+    services.market_ws_service.on_orderbook_update = services.orderbook_service.request_refresh
 
-    grinex_book_handler = GrinexBookHandler(
+    rapira_monitor_handler = ExchangeMonitorHandler(
         manager_repo,
         orderbook_service=services.orderbook_service,
+        command_prefix="рап",
         admin_chat_ids=admin_chat_list,
         admin_user_ids=admin_user_list,
     )
-    dp.include_router(grinex_book_handler.router)
+    dp.include_router(rapira_monitor_handler.router)
+
+    services.abcex_ws_service = AbcexWsService()
+    services.abcex_orderbook_service = OrderbookService(
+        ws_service=services.abcex_ws_service,
+        repo=live_message_repo,
+        live_message_editor=AiogramOrderbookLiveMessageEditor(bot=bot),
+        exchange_name="ABCEX",
+        symbol_label="USDT/RUB",
+        live_message_key="orderbook_live_abcex",
+    )
+    services.abcex_ws_service.on_orderbook_update = (
+        services.abcex_orderbook_service.request_refresh
+    )
+    abcex_monitor_handler = ExchangeMonitorHandler(
+        manager_repo,
+        orderbook_service=services.abcex_orderbook_service,
+        command_prefix="абс",
+        admin_chat_ids=admin_chat_list,
+        admin_user_ids=admin_user_list,
+    )
+    dp.include_router(abcex_monitor_handler.router)
+
 
     if config.best_change_chat_id and container.accounting.best_change:
         best_change_handler = BestChangeHandler(

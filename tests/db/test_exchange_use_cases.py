@@ -354,6 +354,59 @@ class TestCreateCore:
 
 
 class TestCancelCore:
+    @pytest.mark.parametrize("with_deal", [False, True])
+    async def test_cancel_request_chat_origin_reverts_usdt_once(
+        self, pool, cash_request_repo, exchange_requests_repo, cancel_uc, repo, with_deal
+    ) -> None:
+        client_id = await repo.ensure_client(chat_id=REQUEST_CHAT, name="Заявочный чат")
+        await repo.add_currency(client_id, "USDT", 2)
+        await repo.add_currency(client_id, "RUB", 2)
+        service = AcceptShortService(
+            **_common_deps(cash_request_repo, pool, exchange_requests_repo),
+            deal_registrar=_deal_registrar(pool) if with_deal else None,
+        )
+        created_messages = FakeMessenger()
+        created = await service.create_request(
+            _create_params(
+                chat_id=REQUEST_CHAT,
+                chat_name="Заявочный чат",
+                recv_code="USDT",
+                recv_amount_expr="18к",
+                pay_code="RUB",
+                pay_amount_expr="18к*87",
+            ),
+            messenger=created_messages,
+            replier=CollectingReplier(),
+        )
+        assert created.ok
+        assert await balance_of(repo, client_id, "USDT") == Decimal("18000")
+        assert await balance_of(repo, client_id, "RUB") == Decimal("0")
+        card = created_messages.sent_to(REQUEST_CHAT)[0]
+        params = CancelExchangeParams(
+            chat_id=REQUEST_CHAT,
+            chat_name="Заявочный чат",
+            card_message_id=card.message_id,
+            card_text=f"Заявка: {created.req_id}\nПолучаем: 18 000 usdt\nОтдаём: 1 566 000 rub",
+            req_id=created.req_id,
+        )
+        messenger = FakeMessenger()
+        result = await cancel_uc.execute_core(
+            params, messenger=messenger, replier=CollectingReplier()
+        )
+        assert result.ok
+        assert await balance_of(repo, client_id, "USDT") == Decimal("0")
+        assert await balance_of(repo, client_id, "RUB") == Decimal("0")
+        link = await exchange_requests_repo.get_exchange_request_link(client_req_id=created.req_id)
+        assert link["status"] == "cancelled"
+        assert len(messenger.edits) == 1
+        assert "Заявка отменена" in messenger.edits[0].text
+        assert messenger.edits[0].reply_markup is None
+        repeated = await cancel_uc.execute_core(
+            params, messenger=FakeMessenger(), replier=CollectingReplier()
+        )
+        assert not repeated.ok
+        assert await balance_of(repo, client_id, "USDT") == Decimal("0")
+
     async def _create(self, create_uc) -> tuple[str, FakeMessenger]:
         messenger = FakeMessenger()
         result = await create_uc.execute_core(

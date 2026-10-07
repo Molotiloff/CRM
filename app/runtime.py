@@ -14,7 +14,7 @@ from services.lifecycle import (
     LifecycleSupervisor,
 )
 from services.payment_watch import PaymentWatchPoller
-from services.rate_order import OrderbookService, RapiraWsService, RateOrderService
+from services.rate_order import AbcexWsService, OrderbookService, RapiraWsService, RateOrderService
 from services.tg_outbox import TgOutboxWorker
 
 log = logging.getLogger(__name__)
@@ -27,6 +27,8 @@ class BotRuntimeServices:
     profit_capitalization_scheduler: AsyncLifecycle | None = None
     market_ws_service: RapiraWsService | None = None
     orderbook_service: OrderbookService | None = None
+    abcex_ws_service: AbcexWsService | None = None
+    abcex_orderbook_service: OrderbookService | None = None
     rate_order_service: RateOrderService | None = None
     aml_queue_service: AMLQueueService | None = None
     payment_watch_poller: PaymentWatchPoller | None = None
@@ -44,6 +46,10 @@ class BotRuntimeServices:
                 admin_chat_id=config.admin_chat_id,
             )
             log.info("Rapira live orderbook message restored")
+        if self.abcex_orderbook_service:
+            await self.abcex_orderbook_service.restore_live_message(
+                admin_chat_id=config.admin_chat_id,
+            )
         supervisor = LifecycleSupervisor(self._lifecycle_components())
         self._supervisor = supervisor
         try:
@@ -74,7 +80,10 @@ class BotRuntimeServices:
             ("Telegram outbox worker", self.tg_outbox_worker),
             ("Message archive", self.message_archive),
             ("Client invite-link backfill", self.client_invite_link_backfill),
+            ("Rapira orderbook publisher", self.orderbook_service),
+            ("ABCEX orderbook publisher", self.abcex_orderbook_service),
             ("Rapira websocket service", self.market_ws_service),
+            ("ABCEX websocket service", self.abcex_ws_service),
         )
         return tuple(
             LifecycleComponent(name, component) for name, component in candidates if component

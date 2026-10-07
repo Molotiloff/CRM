@@ -64,6 +64,7 @@ EXPECTED_SUCCESS_MODELS: dict[RouteKey, tuple[int, object]] = {
     ("POST", "/api/v1/deals/cash"): (201, DealDetailsResponse),
     ("GET", "/api/v1/deals/{deal_id}"): (200, DealDetailsResponse),
     ("POST", "/api/v1/deals/{deal_id}/table"): (200, DealDetailsResponse),
+    ("POST", "/api/v1/deals/{deal_id}/referrer-spread"): (200, DealDetailsResponse),
     ("PATCH", "/api/v1/deals/{deal_id}"): (200, DealDetailsResponse),
     ("POST", "/api/v1/deals/{deal_id}/status"): (200, DealDetailsResponse),
     ("POST", "/api/v1/settlements/{settlement_id}/resolve"): (
@@ -106,6 +107,7 @@ EXPECTED_ERROR_STATUSES: dict[RouteKey, frozenset[int]] = {
     ("POST", "/api/v1/deals/cash"): frozenset({400, 401, 403, 409}),
     ("GET", "/api/v1/deals/{deal_id}"): frozenset({401, 403, 404}),
     ("POST", "/api/v1/deals/{deal_id}/table"): DEAL_COMMAND_ERRORS,
+    ("POST", "/api/v1/deals/{deal_id}/referrer-spread"): DEAL_COMMAND_ERRORS,
     ("PATCH", "/api/v1/deals/{deal_id}"): DEAL_COMMAND_ERRORS,
     ("POST", "/api/v1/deals/{deal_id}/status"): DEAL_COMMAND_ERRORS,
     ("POST", "/api/v1/settlements/{settlement_id}/resolve"): frozenset(

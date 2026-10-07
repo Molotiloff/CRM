@@ -17,6 +17,7 @@ from api.schemas.deals import (
 )
 from domain import Deal
 from services.crm.deal_status_policy import DealStatusPolicy
+from services.crm.referrer_reward import calculate_referrer_reward
 
 from .common import float_value
 
@@ -51,6 +52,7 @@ def build_deal_details(row: Deal) -> DealDetailsResponse:
         sourceKind=str(row.source_kind) if row.source_kind else None,
         counterpartyName=row.counterparty_name,
         counterpartyPercent=_optional_float(row.counterparty_percent),
+        referrerRewardRub=_referrer_reward_rub(row),
         profitRub=float_value(row.profit),
         comment=row.comment,
         tronscanUrl=row.tronscan_url,
@@ -84,6 +86,12 @@ def build_deal_details(row: Deal) -> DealDetailsResponse:
     )
 
 
+def _referrer_reward_rub(row: Deal) -> float | None:
+    """Calculate display-only referral reward; never post a wallet transaction."""
+    amount = calculate_referrer_reward(str(row.deal_type), row.body.to_dict())
+    return float(amount) if amount is not None else None
+
+
 def _deal_item(row: Deal) -> DealItemDto:
     body = row.body.to_dict()
     client_name = row.client_name or (
@@ -98,6 +106,12 @@ def _deal_item(row: Deal) -> DealItemDto:
         asset=_deal_asset(str(row.deal_type), body),
         direction=_deal_direction(str(row.deal_type), body),
         amountRub=_deal_amount_rub(str(row.deal_type), body, status=status),
+        exchangeAmount=(
+            f"{body.get('recv_amount')} {body.get('recv_code')} → "
+            f"{body.get('pay_amount')} {body.get('pay_code')}"
+            if str(row.deal_type) == "conversion" and body.get("recv_code") and body.get("pay_code")
+            else None
+        ),
         transferAmount=(
             f"{body.get('amount')} {body.get('currency')}"
             if str(row.deal_type) == "client_transfer" else None
@@ -132,7 +146,7 @@ def _deal_type_label(deal_type: str) -> str:
 
 
 def _deal_asset(deal_type: str, body: Mapping[str, Any]) -> str:
-    if deal_type in {"sale", "purchase"}:
+    if deal_type in {"sale", "purchase", "conversion"}:
         non_rub = _exchange_foreign_currency(body)
         if non_rub:
             return non_rub
@@ -159,7 +173,7 @@ def _deal_amount_rub(
         settled_qty = _body_decimal(body, "settled_qty")
         if settled_qty is not None:
             return float_value(settled_qty)
-    if deal_type in {"sale", "purchase"}:
+    if deal_type in {"sale", "purchase", "conversion"}:
         for prefix in ("recv", "pay"):
             if _is_rub(body.get(f"{prefix}_code")):
                 amount = _body_decimal(body, f"{prefix}_amount")
@@ -190,7 +204,7 @@ def _deal_amount_rub(
 
 
 def _deal_direction(deal_type: str, body: Mapping[str, Any]) -> str:
-    if deal_type in {"sale", "purchase"}:
+    if deal_type in {"sale", "purchase", "conversion"}:
         received = str(body.get("recv_code") or "").upper()
         paid = str(body.get("pay_code") or "").upper()
         if received and paid:

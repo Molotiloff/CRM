@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from decimal import Decimal
+from itertools import permutations
 
 import pytest
 
@@ -38,6 +39,10 @@ class Gateway:
         self.buy: list[dict] = []
         self.sale: list[dict] = []
 
+    async def read_main_rate(self, code, cell_map):
+        assert code in cell_map
+        return Decimal("100")
+
     async def append_buy_row(self, **kwargs):
         self.buy.append(kwargs)
         return 1
@@ -63,6 +68,9 @@ class DealService:
         ("USD", "RUB", "12.5", "1000", 1, 0),
         ("RUB", "EUR500", "1000", "10", 0, 1),
         ("EUR500", "RUB", "10", "1000", 1, 0),
+        *[(recv, pay, "10", "20", 1, 1) for recv, pay in permutations(
+            ("USD", "EUR", "EUR500", "USDW", "THB", "USDT"), 2
+        )],
     ],
 )
 async def test_purchase_and_sale_written_only_once(
@@ -88,3 +96,7 @@ async def test_purchase_and_sale_written_only_once(
     if gateway.sale:
         assert gateway.sale[0]["in_amount"] == Decimal(recv_amount)
         assert gateway.sale[0]["out_amount"] == Decimal(pay_amount)
+    if recv == "EUR500" and gateway.buy:
+        assert gateway.buy[0]["currency"] == "EUR"
+    if pay == "EUR500" and gateway.sale:
+        assert gateway.sale[0]["out_currency"] == "EUR"

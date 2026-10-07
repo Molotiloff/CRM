@@ -499,6 +499,7 @@ def test_remaining_service_packages_expose_only_consumed_entry_points() -> None:
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
     }
     assert _package_exports(SERVICES_ROOT / "rate_order" / "__init__.py") == {
+        "AbcexWsService",
         "LiveMessageEditResult",
         "LiveMessageEditStatus",
         "OrderbookService",
@@ -643,7 +644,7 @@ def test_domain_and_transport_packages_expose_only_cross_context_types() -> None
         "CityAssignHandler",
         "ClientsBalancesHandler",
         "ClientsHandler",
-        "GrinexBookHandler",
+        "ExchangeMonitorHandler",
         "ManagersHandler",
         "NonZeroHandler",
         "OfficeCardsHandler",

@@ -17,6 +17,7 @@ from services.lifecycle import (
     ManagedTaskLifecycle,
 )
 from services.payment_watch import PaymentWatchPoller
+from services.rate_order.abcex_ws_service import AbcexWsService
 from services.rate_order.grinex_ws_service import GrinexWsService
 from services.rate_order.rapira_ws_service import RapiraWsService
 from services.tg_outbox import TgOutboxWorker
@@ -155,6 +156,7 @@ def test_all_task_workers_share_managed_lifecycle_template() -> None:
         GrinexWsService,
         PaymentWatchPoller,
         RapiraWsService,
+        AbcexWsService,
         TgOutboxWorker,
         ClientInviteLinkBackfill,
     )
@@ -303,7 +305,7 @@ async def test_async_server_adapter_cancels_server_after_shutdown_timeout() -> N
 
 
 def test_runtime_supervises_all_background_components() -> None:
-    components = [RecordingLifecycle(str(index), []) for index in range(7)]
+    components = [RecordingLifecycle(str(index), []) for index in range(10)]
     runtime = BotRuntimeServices(
         daily_balances_scheduler=components[0],
         best_change_month_report_scheduler=components[1],
@@ -312,6 +314,9 @@ def test_runtime_supervises_all_background_components() -> None:
         tg_outbox_worker=components[4],  # type: ignore[arg-type]
         market_ws_service=components[5],  # type: ignore[arg-type]
         client_invite_link_backfill=components[6],  # type: ignore[arg-type]
+        abcex_ws_service=components[7],  # type: ignore[arg-type]
+        orderbook_service=components[8],  # type: ignore[arg-type]
+        abcex_orderbook_service=components[9],  # type: ignore[arg-type]
     )
 
     assert [component.name for component in runtime._lifecycle_components()] == [
@@ -321,5 +326,8 @@ def test_runtime_supervises_all_background_components() -> None:
         "AML queue service",
         "Telegram outbox worker",
         "Client invite-link backfill",
+        "Rapira orderbook publisher",
+        "ABCEX orderbook publisher",
         "Rapira websocket service",
+        "ABCEX websocket service",
     ]
