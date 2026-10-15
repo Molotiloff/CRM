@@ -125,9 +125,8 @@ class AMLHandler:
             self._pending[token] = _PendingCheck(request, client_id, message.chat.id, user_id, now + 600)
             try:
                 await message.answer(
-                    "⚠️ AML-проверка стоит 1 USDT. Эта сумма будет списана с баланса вашего кошелька.\n"
-                    "При недостатке средств баланс станет отрицательным или уменьшится ещё на 1 USDT.\n"
-                    "Подтвердить проверку? (Подтверждение действует 10 минут.)",
+                    "✅️ AML-проверка стоит 1 USDT. Эта сумма будет списана с баланса вашего кошелька.\n"
+                    "Подтвердить проверку?",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                         InlineKeyboardButton(text="Подтвердить проверку — 1 USDT", callback_data=f"aml:yes:{token}"),
                         InlineKeyboardButton(text="Отмена", callback_data=f"aml:no:{token}"),
