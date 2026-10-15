@@ -6,6 +6,7 @@ from app.container import ApplicationContainer
 from app.lifecycle import SchedulerLifecycleAdapter
 from app.office_cards import OFFICE_CARDS
 from app.runtime import BotRuntimeServices
+from db_asyncpg.repositories.aml_billing import AMLBillingRepository
 from db_asyncpg.repositories.client_closure import ClientClosureRepo
 from db_asyncpg.repositories.client_invite_links import ClientInviteLinkRepo
 from handlers import (
@@ -575,6 +576,7 @@ def setup_handlers(
         aml_handler = AMLHandler(
             manager_repo,
             aml_queue_service=services.aml_queue_service,
+            billing=AMLBillingRepository(container.pool),
             admin_chat_ids=admin_chat_list,
             admin_user_ids=admin_user_list,
         )
