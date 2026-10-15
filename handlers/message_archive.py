@@ -59,6 +59,11 @@ class MessageArchiveHandler:
 
     async def _authorized_message(self, message: Message) -> bool:
         if message.chat.id != self.admin_chat_id:
+            if message.from_user and self._is_admin_private_chat(
+                chat_id=message.chat.id, chat_type=message.chat.type,
+                user_id=message.from_user.id,
+            ):
+                return True
             await message.answer("⛔ Выгрузка истории доступна только в админском чате.")
             return False
         if not message.from_user:
@@ -72,8 +77,16 @@ class MessageArchiveHandler:
         return False
 
     async def _authorized_callback(self, callback: CallbackQuery) -> bool:
-        if not callback.message or callback.message.chat.id != self.admin_chat_id:
-            await callback.answer("Недоступно вне админского чата.", show_alert=True)
+        if not callback.message:
+            await callback.answer("Сообщение недоступно.", show_alert=True)
+            return False
+        if callback.message.chat.id != self.admin_chat_id:
+            if self._is_admin_private_chat(
+                chat_id=callback.message.chat.id, chat_type=callback.message.chat.type,
+                user_id=callback.from_user.id,
+            ):
+                return True
+            await callback.answer("Доступно только в админском чате.", show_alert=True)
             return False
         if callback.from_user.id in self.admin_user_ids:
             return True
@@ -81,6 +94,9 @@ class MessageArchiveHandler:
             return True
         await callback.answer("Доступно только менеджерам.", show_alert=True)
         return False
+
+    def _is_admin_private_chat(self, *, chat_id: int, chat_type: str, user_id: int) -> bool:
+        return chat_type == "private" and chat_id == user_id and user_id in self.admin_user_ids
 
     async def _command(self, message: Message) -> None:
         if not await self._authorized_message(message):
