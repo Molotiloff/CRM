@@ -8,6 +8,13 @@ from aiogram.types import Message
 debug_router = Router()
 
 
+@debug_router.message(Command("чат"))
+async def cmd_chat(message: Message) -> None:
+    chat = message.chat
+    title = chat.title or chat.full_name or chat.username or str(chat.id)
+    await message.answer(f"<code>{html.escape(title)}</code>", parse_mode="HTML")
+
+
 @debug_router.message(Command("whoami"))
 async def cmd_whoami(message: Message) -> None:
     u = message.from_user
