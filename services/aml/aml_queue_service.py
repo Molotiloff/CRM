@@ -61,17 +61,33 @@ class AMLQueueService(ManagedTaskLifecycle):
         try:
             while not self.is_stopping:
                 task = await self._queue.get()
+                result = None
                 try:
                     result = await self._check_wallet(task)
                     await task.on_success(result)
                 except Exception as e:  # noqa: BLE001 — worker reports task failures via callback
                     log.warning("AML task failed target=%s err=%r", task.request.value, e)
-                    await task.on_error(e)
+                    try:
+                        await task.on_error(e)
+                    except Exception:
+                        log.exception("Failed to notify about AML task failure")
                 finally:
                     self._queue.task_done()
                     self._metrics.set_queue_size("aml.pending", self._queue.qsize())
+                    # Do not retain the previous report/callbacks while awaiting the next task.
+                    result = None
+                    del task
         finally:
             log.info("AML queue worker stopped")
+
+    async def stop(self) -> None:
+        try:
+            await super().stop()
+        finally:
+            while not self._queue.empty():
+                self._queue.get_nowait()
+                self._queue.task_done()
+            self._metrics.set_queue_size("aml.pending", 0)
 
     @measured_operation("aml.check_wallet")
     async def _check_wallet(self, task: AMLQueueTask) -> AMLCheckResult:
@@ -79,18 +95,20 @@ class AMLQueueService(ManagedTaskLifecycle):
         if (
             task.request.network == "trc20"
             and task.request.kind == "address"
-            and self._tron_balance_provider is not None
             and isinstance(result.get("report_data"), dict)
         ):
+            balance_text = "недоступен (Tronscan)"
             try:
-                balance = await self._tron_balance_provider.get_usdt_balance(
-                    address=task.request.value
-                )
-                balance_text = f"{balance:.6f} USDT"
+                if self._tron_balance_provider is not None:
+                    balance = await self._tron_balance_provider.get_usdt_balance(
+                        address=task.request.value
+                    )
+                    balance_text = f"{balance:.6f} USDT"
             except Exception:  # noqa: BLE001 — отсутствие остатка не отменяет готовый AML-отчёт
                 log.warning("Failed to get Tronscan USDT balance for %s", task.request.value, exc_info=True)
                 balance_text = "недоступен (Tronscan)"
             result["message_text"] = build_report_message(
                 result["report_data"], wallet_balance=balance_text
             )
+            result["wallet_balance"] = balance_text
         return result

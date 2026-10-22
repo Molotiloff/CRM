@@ -11,13 +11,25 @@ from typing import cast
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from db_asyncpg.ports.administration import ManagerRepositoryPort
 from domain.tron_wallet import is_probable_tron_wallet, normalize_wallet
 from services.aml import AMLQueueFullError, AMLQueueService, AMLQueueTask
 from services.aml.billing import AMLBillingPort
+from services.aml.getblock_parser import build_report_message
 from services.aml.models import AMLCheckRequest, AMLNetwork
+from services.aml.pdf_report import AMLReportPDFBuilder
+from services.aml.report_image import render_report_page
+from services.thread_adapter import SerializedThreadExecutor
+from telegram_adapters.memory_document import EphemeralBufferedInputFile
+from telegram_adapters.report_link import append_getblock_link, getblock_link_entities
+from telegram_adapters.text_chunks import split_telegram_text
 
 _RE_AML = re.compile(r"^/амл(?:@\w+)?(?:\s+(.+))?$", re.IGNORECASE)
 _EVM_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
@@ -86,10 +98,13 @@ class AMLHandler:
         billing: AMLBillingPort,
         admin_chat_ids: Iterable[int] | None = None,
         admin_user_ids: Iterable[int] | None = None,
+        pdf_builder: AMLReportPDFBuilder | None = None,
     ) -> None:
         self.repo = repo
         self.aml_queue_service = aml_queue_service
         self.billing = billing
+        self._pdf_builder = pdf_builder or AMLReportPDFBuilder()
+        self._pdf_executor = SerializedThreadExecutor(task_name="aml_pdf_render")
         self._pending: dict[str, _PendingCheck] = {}
         self.admin_chat_ids = set(admin_chat_ids or [])
         self.admin_user_ids = set(admin_user_ids or [])
@@ -175,26 +190,72 @@ class AMLHandler:
         bot = cast(Bot, message.bot)
         chat_id = message.chat.id
         wait_message_id = wait_msg.message_id
+        image_sent = False
 
         async def on_success(result: dict) -> None:
-            report = result["message_text"]
+            nonlocal image_sent
+            report_data = result["report_data"]
+            pdf_data = await self._pdf_executor.run(
+                self._pdf_builder.build, report_data, request=request,
+                wallet_balance=result.get("wallet_balance"),
+            )
+            report = build_report_message(
+                report_data, wallet_balance=result.get("wallet_balance"), image_attached=True,
+            )
+            report, report_url = append_getblock_link(report, str(report_data.get("preview_link") or ""))
+            caption_parts = split_telegram_text(report, limit=1024)
+            try:
+                page_index = 0
+                while True:
+                    image_data, page_count = await self._pdf_executor.run(
+                        render_report_page, pdf_data, page_index,
+                    )
+                    photo = EphemeralBufferedInputFile(
+                        image_data, filename=f"SKYEX_AML_{page_index + 1}.png",
+                    )
+                    try:
+                        await bot.send_photo(
+                            chat_id=chat_id, photo=photo,
+                            caption=caption_parts[0] if page_index == 0 else f"SKYEX · Отчёт AML-проверки · Страница {page_index + 1}/{page_count}",
+                            caption_entities=getblock_link_entities(caption_parts[0], report_url) if page_index == 0 and len(caption_parts) == 1 else None,
+                            parse_mode=None,
+                        )
+                        image_sent = True
+                    finally:
+                        photo.release()
+                        image_data = b""
+                    page_index += 1
+                    if page_index >= page_count:
+                        break
+            finally:
+                pdf_data = b""
+            # Telegram captions are limited to 1024 UTF-16 units. Never truncate sources.
+            remaining = split_telegram_text("".join(caption_parts[1:]))
+            for index, chunk in enumerate(remaining):
+                await bot.send_message(
+                    chat_id, chunk, parse_mode=None,
+                    entities=getblock_link_entities(chunk, report_url) if index == len(remaining) - 1 else None,
+                )
+            # Charge only after every report page and all statistics have been sent.
             if client_id is not None and payment_key is not None:
                 balance = await self.billing.charge(
                     client_id=client_id, chat_id=chat_id, idempotency_key=payment_key,
                 )
-                report += f"\n\nСписано за AML-проверку: 1 USDT.\nБаланс: {balance:.2f} USDT"
-            try:
-                await bot.edit_message_text(
-                    report,
-                    chat_id=chat_id,
-                    message_id=wait_message_id,
+                await bot.send_message(
+                    chat_id, f"Списано за AML-проверку: 1 USDT.\nБаланс: {balance:.2f} USDT", parse_mode=None,
                 )
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=wait_message_id)
             except TelegramAPIError:
-                await bot.send_message(chat_id, report)
+                await bot.edit_message_text("✅ AML-проверка завершена.", chat_id=chat_id, message_id=wait_message_id, parse_mode=None)
 
         async def on_error(exc: Exception) -> None:
+            status = (
+                "Изображение отчёта уже отправлено, но не удалось завершить обработку или обновить статус. Обратитесь к менеджеру."
+                if image_sent else "AML-проверка завершилась ошибкой. Средства не списаны."
+            )
             await bot.edit_message_text(
-                f"❌ AML-проверка завершилась ошибкой:\n<code>{escape(str(exc))}</code>",
+                f"❌ {status}\n<code>{escape(str(exc))}</code>",
                 chat_id=chat_id,
                 message_id=wait_message_id,
                 parse_mode="HTML",

@@ -3,9 +3,41 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from aiogram.client.default import Default
-from aiogram.types import Chat, Message, MessageOriginChannel, MessageOriginUser, PhotoSize, User
+from aiogram.types import (
+    Chat,
+    Document,
+    Message,
+    MessageOriginChannel,
+    MessageOriginUser,
+    PhotoSize,
+    User,
+)
 
 from services.message_archive.normalizer import MessageArchiveNormalizer
+
+
+def test_outbound_aml_pdf_keeps_telegram_metadata_without_local_download():
+    message = Message(
+        message_id=22, date=datetime(2026, 10, 21, tzinfo=UTC),
+        chat=Chat(id=-100, type="group", title="Клиент"),
+        document=Document(file_id="telegram-pdf", file_unique_id="unique-pdf", file_name="SKYEX_AML_wallet.pdf", mime_type="application/pdf"),
+    )
+    archived = MessageArchiveNormalizer.from_bot_message(message, outbound=True)
+    assert archived.attachments[0].telegram_file_id == "telegram-pdf"
+    assert archived.attachments[0].download_status == "skipped"
+
+
+def test_only_generated_outbound_aml_photos_are_not_downloaded():
+    message = Message(
+        message_id=23, date=datetime(2026, 10, 23, tzinfo=UTC),
+        chat=Chat(id=-100, type="group", title="Клиент"),
+        caption="SKYEX · Отчёт AML-проверки · Страница 1/1",
+        photo=[PhotoSize(file_id="aml-image", file_unique_id="aml-image-unique", width=1273, height=1800)],
+    )
+    assert MessageArchiveNormalizer.from_bot_message(message, outbound=True).attachments[0].download_status == "skipped"
+    assert MessageArchiveNormalizer.from_bot_message(message, outbound=False).attachments[0].download_status == "pending"
+    with_statistics = message.model_copy(update={"caption": "SKYEX · Отчёт AML-проверки\nUSDT Адрес:\nTaddress\nSanctions 10%"})
+    assert MessageArchiveNormalizer.from_bot_message(with_statistics, outbound=True).attachments[0].download_status == "skipped"
 
 
 def test_bot_message_normalization_uses_largest_photo_and_direction() -> None:

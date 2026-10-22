@@ -149,7 +149,7 @@ class MessageArchiveNormalizer:
         text = message.text if message.text is not None else message.caption
         raw_entities = message.entities if message.text is not None else message.caption_entities
         entities = [item.model_dump(mode="json", exclude_none=True) for item in raw_entities or []]
-        attachments = cls._bot_attachments(message)
+        attachments = cls._bot_attachments(message, outbound=outbound)
         message_type = str(_as_value(message.content_type))
         raw_payload = message.model_dump(
             mode="json",
@@ -231,9 +231,12 @@ class MessageArchiveNormalizer:
         return legacy_result or None
 
     @classmethod
-    def _bot_attachments(cls, message: Any) -> tuple[ArchiveAttachment, ...]:
+    def _bot_attachments(cls, message: Any, *, outbound: bool = False) -> tuple[ArchiveAttachment, ...]:
         result: list[ArchiveAttachment] = []
         if message.photo:
+            telegram_only_report = outbound and str(getattr(message, "caption", "") or "").startswith((
+                "SKYEX · Отчёт AML-проверки · Страница ", "SKYEX · Отчёт AML-проверки\n",
+            ))
             photo = message.photo[-1]
             result.append(
                 ArchiveAttachment(
@@ -243,7 +246,7 @@ class MessageArchiveNormalizer:
                     file_size=photo.file_size,
                     width=photo.width,
                     height=photo.height,
-                    download_status="pending",
+                    download_status="skipped" if telegram_only_report else "pending",
                     metadata={"variants": len(message.photo)},
                 )
             )

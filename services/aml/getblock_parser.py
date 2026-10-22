@@ -359,9 +359,13 @@ def _parse_report_preview_soup(
 
 
 def build_report_message(
-    report_data: dict[str, Any], *, wallet_balance: str | None = None
+    report_data: dict[str, Any], *, wallet_balance: str | None = None,
+    pdf_attached: bool = False,
+    image_attached: bool = False,
 ) -> str:
     asset_name = report_data.get("asset_name", "Адрес")
+    if pdf_attached or image_attached:
+        asset_name = report_data.get("token") or asset_name
     hash_value = report_data.get("hash", "")
     risk_emoji = report_data.get("risk_emoji", "🟢")
     risk_label_ru = report_data.get("risk_label_ru", "Низкий уровень риска")
@@ -375,10 +379,11 @@ def build_report_message(
     dangerous_sources = report_data.get("dangerous_sources", [])
 
     target_label = "Транзакция" if str(report_data.get("type", "")).lower() == "transaction" else "Адрес"
-    parts = [
+    parts = ["SKYEX · Отчёт AML-проверки"] if pdf_attached or image_attached else []
+    parts.extend([
         f"{asset_name} {target_label}:",
         f"{hash_value}",
-    ]
+    ])
     if wallet_balance is not None:
         parts.append(f"На балансе кошелька: {wallet_balance}")
     parts.extend([
@@ -404,5 +409,8 @@ def build_report_message(
         parts.extend(dangerous_sources)
         parts.append("")
 
-    parts.extend(["Полный отчет:", preview_link])
+    if pdf_attached:
+        parts.append("Отчёт прикреплён в PDF.")
+    elif not image_attached:
+        parts.extend(["Полный отчет:", preview_link])
     return "\n".join(parts)
