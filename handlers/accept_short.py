@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 
 from aiogram import Bot, F, Router
@@ -19,6 +20,8 @@ from telegram_adapters.auth import (
     require_manager_or_admin_message,
 )
 from telegram_adapters.message_context import get_chat_name
+
+log = logging.getLogger(__name__)
 
 
 def _is_forwarded_message(message: Message) -> bool:
@@ -51,14 +54,30 @@ class AcceptShortHandler:
             admin_user_ids: Iterable[int] | None = None,
             *,
             ignore_chat_ids: Iterable[int] | None = None,
+            silent_chat_ids: Iterable[int] | None = None,
     ) -> None:
         self.repo = repo
         self.service = service
         self.admin_chat_ids = set(admin_chat_ids or [])
         self.admin_user_ids = set(admin_user_ids or [])
         self.ignore_chat_ids = set(ignore_chat_ids or set())
+        self.silent_chat_ids = set(silent_chat_ids or ())
         self.router = Router()
         self._register()
+
+    async def on_silent_exchange(self, message: Message) -> None:
+        if message.chat.id not in self.silent_chat_ids or _is_forwarded_message(message):
+            return
+        if not message.from_user or message.from_user.is_bot:
+            return
+        try:
+            await self.service.execute_silent_balance(AcceptShortCommand(
+                chat_id=message.chat.id, chat_name=get_chat_name(message),
+                message_id=message.message_id, text=message.text or "",
+                actor_name=_actor_name(message),
+            ))
+        except Exception:
+            log.exception("Silent exchange failed chat_id=%s message_id=%s", message.chat.id, message.message_id)
 
     async def _cmd_accept_short(self, message: Message) -> None:
         # Игнорируем в "шумных" чатах

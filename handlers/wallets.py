@@ -610,6 +610,26 @@ class WalletsHandler:
     async def _execute_currency_change(self, message: Message) -> None:
         raw_text = message.text or message.caption or ""
         if message.chat.id in self.silent_chat_ids:
+            if message.from_user and getattr(message.from_user, "is_bot", False):
+                return
+            if getattr(message, "forward_origin", None) is not None:
+                return
+            try:
+                cash_change = WalletCommandParser.parse_partner_cash_change(raw_text)
+            except ValueError:
+                return
+            if cash_change is not None:
+                await self.interaction_service.wallet_service.apply_external_currency_change(
+                    chat_id=message.chat.id,
+                    chat_name=get_chat_name(message),
+                    code=cash_change.code,
+                    amount=cash_change.amount,
+                    expr=raw_text,
+                    extra_comment=cash_change.extra_comment,
+                    source="partner_chat_command",
+                    idempotency_key=f"{message.chat.id}:{message.message_id}",
+                )
+                return
             try:
                 partner_send = (
                     self.interaction_service.wallet_service.parser.parse_partner_usdt_send(

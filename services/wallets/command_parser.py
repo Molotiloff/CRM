@@ -4,6 +4,8 @@ import re
 from collections.abc import Mapping
 from decimal import Decimal
 
+from services.cash_requests.constants import CMD_MAP
+from services.cash_requests.parsing import parse_dep_wd
 from services.expression_calculator import CalcError, evaluate
 from services.wallets.models import ParsedCurrencyChange, PartnerUsdtSendCommand
 
@@ -128,6 +130,45 @@ class WalletCommandParser:
             cash_city=cash_city,
             client_name_for_transfer=client_name_for_transfer,
             extra_comment=extra_comment,
+        )
+
+    @classmethod
+    def parse_partner_cash_change(cls, raw_text: str) -> ParsedCurrencyChange | None:
+        """Parse balance-only cash commands, without creating a cash request."""
+        text = raw_text.strip()
+        parts = text.split()
+        if not parts:
+            return None
+        command = parts[0].split("@", 1)[0].lower().removeprefix("/")
+        if not text.startswith("/") or command not in {*CMD_MAP, "депп", "выдп", "деп", "выд"}:
+            return None
+        command_map = dict(CMD_MAP)
+        command_map.update({"депп": ("dep", "EUR500"), "выдп": ("wd", "EUR500")})
+        if command in {"деп", "выд"}:
+            # Explicit currency is optional; plain /деп and /выд use RUB.
+            code = "RUB"
+            tokens = parts[1:]
+            currencies = {"RUB", "USD", "USDT", "EUR", "EUR500", "USDW", "THB"}
+            if tokens and cls.normalize_code_alias(tokens[0]) in currencies:
+                code = cls.normalize_code_alias(tokens.pop(0))
+            elif tokens and cls.normalize_code_alias(tokens[-1]) in currencies:
+                code = cls.normalize_code_alias(tokens.pop())
+            text = f"/{command} {' '.join(tokens)}"
+            command_map[command] = ("dep" if command == "деп" else "wd", code)
+        parsed = parse_dep_wd(text, cmd_map=command_map, city_keys=set(), default_city="")
+        if parsed is None:
+            raise ValueError("Сумма не указана")
+        try:
+            amount = Decimal(evaluate(parsed.amount_expr.replace(",", ".")))
+        except CalcError as error:
+            raise ValueError(f"Ошибка в сумме: {error}") from error
+        if not amount.is_finite() or amount <= 0:
+            raise ValueError("Сумма должна быть положительной")
+        return ParsedCurrencyChange(
+            code=parsed.code, expr=parsed.amount_expr,
+            amount=amount if parsed.kind == "dep" else -amount,
+            tail="", is_city_cash=False, cash_city=None,
+            client_name_for_transfer="", extra_comment=parsed.comment,
         )
 
     @staticmethod

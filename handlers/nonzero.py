@@ -18,8 +18,9 @@ class NonZeroHandler:
            с тем же компактным выравниванием.
     Под ответом — кнопки «Выписка за месяц» и «Выписка за всё время».
     """
-    def __init__(self, service: NonZeroWalletQueryService, admin_chat_ids=None, admin_user_ids=None) -> None:
+    def __init__(self, service: NonZeroWalletQueryService, admin_chat_ids=None, admin_user_ids=None, *, silent_chat_ids: set[int] | None = None) -> None:
         self.service = service
+        self.silent_chat_ids = set(silent_chat_ids or ())
         self.router = Router()
         self._register()
 
@@ -31,7 +32,7 @@ class NonZeroHandler:
                 chat_name=get_chat_name(message),
             ),
             parse_mode="HTML",
-            reply_markup=statements_kb(),
+            reply_markup=None if message.chat.id in self.silent_chat_ids else statements_kb(),
         )
 
     async def _cb_statement(self, cq: CallbackQuery) -> None:

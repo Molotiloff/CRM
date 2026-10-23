@@ -135,6 +135,7 @@ class AcceptShortService:
         if keyboards is None:
             raise ValueError("keyboards is required")
         balance_service = balance_service or ExchangeBalanceService(unit_of_work_factory)
+        self._silent_balance_service = balance_service
         calculator = calculator or ExchangeCalculator()
         text_builder = text_builder or ExchangeTextBuilder()
         transaction_service = transaction_service or ExchangeTransactionService(
@@ -165,6 +166,22 @@ class AcceptShortService:
 
     def is_request_chat_origin(self, chat_id: int) -> bool:
         return bool(self.request_chat_id and int(chat_id) == int(self.request_chat_id))
+
+    async def execute_silent_balance(self, command: AcceptShortCommand) -> None:
+        """Partner bookkeeping only: no request, outbox, fulfillment or messages."""
+        parsed = await self.parse_command(
+            command.text, chat_id=command.chat_id, chat_name=command.chat_name,
+        )
+        if parsed is None:
+            raise ValueError("Некорректная короткая обменная команда")
+        client_id = await self.repo.ensure_client(chat_id=command.chat_id, name=command.chat_name)
+        key = f"silent_exchange:{command.chat_id}:{command.message_id}"
+        await self._silent_balance_service.apply_create(
+            client_id=client_id, recv_code=parsed.recv_code, recv_amount=parsed.recv_amount,
+            recv_comment=command.text, pay_code=parsed.pay_code, pay_amount=parsed.pay_amount,
+            pay_comment=command.text, recv_is_deposit=False, pay_is_withdraw=False,
+            idem_recv=f"{key}:receive", idem_pay=f"{key}:pay",
+        )
 
     async def create_request(
         self,

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from aiogram.types import CallbackQuery, Chat, LinkPreviewOptions, Message, User
 
+from handlers.nonzero import NonZeroHandler
 from handlers.start import SKYEX_INFO_TEXT, StartHandler
 from handlers.wallets import WalletsHandler
 from middlewares.silent_accounting_chats import SilentAccountingChatsMiddleware
@@ -41,13 +42,36 @@ async def test_silent_middleware_routes_only_start_and_wallet_changes() -> None:
     assert await middleware(downstream, _message("/start"), {}) == "start"
     assert await middleware(downstream, _message("/RUB 100"), {}) == "wallet"
     assert await middleware(downstream, _message("/баотпр"), {}) == "wallet"
-    assert await middleware(downstream, _message("/дай"), {}) is None
+    assert await middleware(downstream, _message("/дай"), {}) == "downstream"
+    assert await middleware(downstream, _message("/дай USDT"), {}) == "downstream"
+    assert await middleware(downstream, _message("/дай@skyex_bot руб"), {}) == "downstream"
+    assert await middleware(downstream, _message("/дайка 10"), {}) == "wallet"
+    assert await middleware(downstream, _message("/амл"), {}) is None
     assert await middleware(downstream, _message("обычное сообщение"), {}) is None
     assert await middleware(downstream, _message("/дай", chat_id=-300), {}) == "downstream"
 
     assert start.await_count == 1
-    assert wallet.await_count == 2
-    assert downstream.await_count == 1
+    assert wallet.await_count == 3
+    assert downstream.await_count == 4
+
+
+async def test_balance_query_in_silent_chat_answers_without_blocked_statement_buttons():
+    service = SimpleNamespace(build_wallet_message=AsyncMock(return_value="Баланс: 100 RUB"))
+    handler = NonZeroHandler(service, silent_chat_ids={-200})
+    message = SimpleNamespace(
+        chat=SimpleNamespace(id=-200, title="BS"), text="/дай RUB", answer=AsyncMock(),
+    )
+    await handler._cmd_give(message)
+    service.build_wallet_message.assert_awaited_once_with(command_text="/дай RUB", chat_id=-200, chat_name="BS")
+    message.answer.assert_awaited_once_with("Баланс: 100 RUB", parse_mode="HTML", reply_markup=None)
+
+
+async def test_balance_query_in_normal_chat_preserves_statement_buttons():
+    service = SimpleNamespace(build_wallet_message=AsyncMock(return_value="Баланс"))
+    handler = NonZeroHandler(service, silent_chat_ids={-200})
+    message = SimpleNamespace(chat=SimpleNamespace(id=-300, title="Клиент"), text="/дай", answer=AsyncMock())
+    await handler._cmd_give(message)
+    assert message.answer.call_args.kwargs["reply_markup"] is not None
 
 
 async def test_silent_middleware_swallows_callbacks() -> None:

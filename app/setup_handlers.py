@@ -287,7 +287,10 @@ def setup_handlers(
     )
     dp.include_router(payment_watch_handler.router)
 
-    nonzero_handler = NonZeroHandler(NonZeroWalletQueryService(client_wallet_tx_repo))
+    nonzero_handler = NonZeroHandler(
+        NonZeroWalletQueryService(client_wallet_tx_repo),
+        silent_chat_ids=silent_accounting_chat_ids,
+    )
 
     services.market_ws_service = RapiraWsService()
     services.profit_capitalization_scheduler = SchedulerLifecycleAdapter(
@@ -413,23 +416,25 @@ def setup_handlers(
         client_closure_repo=ClientClosureRepo(container.pool),
         default_city=config.default_city,
     )
-    if silent_accounting_chat_ids:
-        silent_accounting_middleware = SilentAccountingChatsMiddleware(
-            silent_accounting_chat_ids,
-            start_handler=start_handler.on_start,
-            wallet_change_handler=wallets_handler.on_currency_change,
-        )
-        dp.message.outer_middleware(silent_accounting_middleware)
-        dp.callback_query.outer_middleware(silent_accounting_middleware)
-
     accept_short_handler = AcceptShortHandler(
         manager_repo,
         container.exchange.accept_short,
         admin_chat_ids=admin_chat_list,
         admin_user_ids=admin_user_list,
         ignore_chat_ids=None,
+        silent_chat_ids=silent_accounting_chat_ids,
     )
     dp.include_router(accept_short_handler.router)
+
+    if silent_accounting_chat_ids:
+        silent_accounting_middleware = SilentAccountingChatsMiddleware(
+            silent_accounting_chat_ids,
+            start_handler=start_handler.on_start,
+            wallet_change_handler=wallets_handler.on_currency_change,
+            exchange_handler=accept_short_handler.on_silent_exchange,
+        )
+        dp.message.outer_middleware(silent_accounting_middleware)
+        dp.callback_query.outer_middleware(silent_accounting_middleware)
 
     if request_chat_id:
         act_handler = ActHandler(

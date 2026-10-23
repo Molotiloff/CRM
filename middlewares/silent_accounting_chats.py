@@ -8,6 +8,8 @@ from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message
 
 _START_COMMAND_RE = re.compile(r"(?iu)^/start(?:@\w+)?(?:\s|$)")
+_BALANCE_COMMAND_RE = re.compile(r"(?iu)^/дай(?:@\w+)?(?:\s|$)")
+_EXCHANGE_COMMAND_RE = re.compile(r"(?iu)^/(?:пбат|пд|пе|пт|пр|пб|прмск|прспб|прпер|пп)(?:@\w+)?(?:\s|$)")
 _WALLET_CHANGE_RE = re.compile(
     r"(?iu)^/[A-Za-zА-Яа-яЁё0-9_]+(?:@\w+)?\s+"
 )
@@ -19,7 +21,7 @@ SilentMessageHandler = Callable[[Message], Awaitable[Any]]
 
 
 class SilentAccountingChatsMiddleware(BaseMiddleware):
-    """Allow silent wallet bookkeeping and suppress every other chat interaction."""
+    """Allow balance queries and silent bookkeeping; suppress other interactions."""
 
     def __init__(
         self,
@@ -27,11 +29,13 @@ class SilentAccountingChatsMiddleware(BaseMiddleware):
         *,
         start_handler: SilentMessageHandler,
         wallet_change_handler: SilentMessageHandler,
+        exchange_handler: SilentMessageHandler | None = None,
     ) -> None:
         super().__init__()
         self._chat_ids = {int(chat_id) for chat_id in chat_ids}
         self._start_handler = start_handler
         self._wallet_change_handler = wallet_change_handler
+        self._exchange_handler = exchange_handler
 
     async def __call__(
         self,
@@ -46,8 +50,14 @@ class SilentAccountingChatsMiddleware(BaseMiddleware):
             return None
 
         text = (event.text or event.caption or "").strip()
+        if event.text and _BALANCE_COMMAND_RE.match(text):
+            return await handler(event, data)
         if _START_COMMAND_RE.match(text):
             return await self._start_handler(event)
+        if _EXCHANGE_COMMAND_RE.match(text):
+            if event.text and self._exchange_handler is not None:
+                return await self._exchange_handler(event)
+            return None
         if _WALLET_CHANGE_RE.match(text) or _PARTNER_USDT_RE.match(text):
             return await self._wallet_change_handler(event)
         return None
