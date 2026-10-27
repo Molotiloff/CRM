@@ -15,9 +15,37 @@ def test_pdf_page_renders_to_readable_png_in_memory():
     assert count == 1
     with Image.open(io.BytesIO(data)) as image:
         assert image.format == "PNG"
-        # PDFium rounds the floating-point A4 dimensions up to whole pixels.
-        assert 1800 <= image.height <= 1801
+        # Keep the interpretation card, but not the footer below it.
+        assert 1565 <= image.height <= 1566
         assert 1200 < image.width < 1300
+
+
+def test_all_pages_are_cropped_after_interpretation_without_changing_content(monkeypatch):
+    from services.aml import report_image
+
+    pdf = AMLReportPDFBuilder().build(
+        {"dangerous_sources": [f"Source{i} 10%" for i in range(40)]},
+        request=AMLCheckRequest("Taddress"), wallet_balance="123.456789 USDT",
+    )
+    original = report_image.pdfium.PdfPage.render
+    crops = []
+
+    def render(page, *args, **kwargs):
+        crops.append(kwargs["crop"])
+        return original(page, *args, **kwargs)
+
+    monkeypatch.setattr(report_image.pdfium.PdfPage, "render", render)
+    _, count = render_report_page(pdf, 0)
+    assert count > 1
+    for index in range(1, count):
+        data, pages = render_report_page(pdf, index)
+        assert pages == count
+        with Image.open(io.BytesIO(data)) as image:
+            assert 1565 <= image.height <= 1566
+    assert len(crops) == count
+    for left, bottom, right, top in crops:
+        assert (left, right, top) == (0, 0, 0)
+        assert bottom == pytest.approx(841.89 - 732, abs=0.1)
 
 
 def test_pdfium_objects_close_even_when_png_encoding_fails():
