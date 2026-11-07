@@ -125,6 +125,7 @@ class DealSource(StrEnum):
 
 
 class SourceKind(StrEnum):
+    INVOICE = "invoice"
     EXCHANGE = "exchange"
     CASH = "cash"
     FULFILLMENT = "fulfillment"

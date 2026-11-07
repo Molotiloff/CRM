@@ -9,7 +9,6 @@ from decimal import Decimal, InvalidOperation
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import (
-    BufferedInputFile,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -32,8 +31,7 @@ from services.crm.client_transfer_service import (
 )
 from services.crm.client_transfer_workflow import ClientTransferWorkflow
 from services.number_formatting import format_amount_core
-from services.receipts import ReceiptImageBuilder, ReceiptRow
-from services.receipts.image import format_receipt_datetime
+from services.receipts import ReceiptImageBuilder
 from services.wallets import WalletInteractionService
 from services.wallets.command_parser import WalletCommandParser
 from services.wallets.models import CurrencyChangeCommand
@@ -352,45 +350,10 @@ class WalletsHandler:
         if result.repeated:
             await message.answer("Эта корректировка уже применена или сумма не изменилась")
             return
-        status = "отменён" if result.canceled else "изменён"
-        amount = format_amount_core(result.new_amount, result.precision)
-        if not result.canceled and message.bot is not None:
-            try:
-                receipt = self.receipt_builder.build(
-                    amount=result.new_amount,
-                    currency=result.currency,
-                    precision=result.precision,
-                    rows=(
-                        ReceiptRow("Статус", "Изменено", accent=True),
-                        ReceiptRow("Номер операции", f"#{result.deal_id}"),
-                        ReceiptRow("Отправитель", result.from_client_name),
-                        ReceiptRow("Получатель", result.to_client_name),
-                        ReceiptRow("Дата и время", format_receipt_datetime(message.date)),
-                    ),
-                )
-                for chat_id in (message.chat.id, result.to_chat_id):
-                    await message.bot.send_photo(
-                        chat_id,
-                        BufferedInputFile(receipt, filename=f"client_transfer_{result.deal_id}_updated.png"),
-                        caption=f"Перевод #{result.deal_id}",
-                    )
-            except Exception:
-                log.exception("Failed to send corrected transfer receipt deal_id=%s", result.deal_id)
-        await message.answer(
-            f"Перевод #{result.deal_id} {status}.\n"
-            f"Сумма: {amount} {result.currency}\n"
-            f"Баланс: {format_amount_core(result.from_balance, result.precision)} {result.currency}"
+        assert self.client_transfer_workflow is not None
+        await self.client_transfer_workflow.notify_adjustment(
+            result, from_chat_id=message.chat.id, changed_at=message.date,
         )
-        if message.bot is not None:
-            try:
-                await message.bot.send_message(
-                    result.to_chat_id,
-                    f"Перевод #{result.deal_id} {status}.\n"
-                    f"Сумма: {amount} {result.currency}\n"
-                    f"Баланс: {format_amount_core(result.to_balance, result.precision)} {result.currency}",
-                )
-            except Exception:
-                log.exception("Failed to notify transfer adjustment deal_id=%s", result.deal_id)
 
     @staticmethod
     def _parse_transfer(raw_text: str) -> tuple[Decimal, str, str]:

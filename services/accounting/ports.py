@@ -149,6 +149,7 @@ class ProfitAccrualRepositoryPort(Protocol):
     async def append(
         self, *, deal_id: int, qty: Decimal, settlement_status: str,
         idempotency_key: str, received_at: datetime | None = None,
+        cash_only: bool = False,
     ) -> ProfitAccrual: ...
 
     async def list_pending_before(self, boundary: datetime) -> list[ProfitAccrual]: ...
@@ -273,6 +274,8 @@ class AccountingDashboardReadPort(Protocol):
 
 
 class FulfillmentQueueRepositoryPort(Protocol):
+    async def cancel_for_deal(self, *, deal_id: int) -> None: ...
+
     async def acquire_client_lock(self, chat_id: int) -> None: ...
 
     async def active_user_id_by_tg_user_id(

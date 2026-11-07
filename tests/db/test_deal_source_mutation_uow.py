@@ -28,6 +28,7 @@ from services.crm.deal_source_mutation import (
 )
 from services.crm.deal_status_policy import DealStatusPolicy
 from services.crm.exchange_deal_source_adapter import ExchangeDealSourceAdapter
+from services.crm.fulfillment_deal_source_adapter import FulfillmentDealSourceAdapter
 from services.exchange.balance_service import ExchangeBalanceService
 from tests.db.conftest import balance_of
 
@@ -73,6 +74,7 @@ def _source_mutation_service(pool, event_bus: DealEventBus):
                     repository=repository,
                     cash_edit=cash_edit,
                 ),
+                FulfillmentDealSourceAdapter(),
             )
         ),
     )

@@ -11,6 +11,7 @@ from api.schemas.dashboard import DashboardResponse, DashboardShadowReportDto
 from api.schemas.deals import (
     DealDetailsResponse,
     DealFormContextDto,
+    DealSettlementDto,
     DealsPageResponse,
     SettlementResolutionResponse,
 )
@@ -62,7 +63,13 @@ EXPECTED_SUCCESS_MODELS: dict[RouteKey, tuple[int, object]] = {
     ("POST", "/api/v1/deals/client-transfers"): (201, DealDetailsResponse),
     ("POST", "/api/v1/deals/exchanges"): (201, DealDetailsResponse),
     ("POST", "/api/v1/deals/cash"): (201, DealDetailsResponse),
+    ("POST", "/api/v1/deals/invoices"): (201, DealDetailsResponse),
+    ("POST", "/api/v1/deals/{deal_id}/invoice/post"): (200, DealDetailsResponse),
+    ("POST", "/api/v1/deals/{deal_id}/invoice/cancel"): (200, DealDetailsResponse),
     ("GET", "/api/v1/deals/{deal_id}"): (200, DealDetailsResponse),
+    ("GET", "/api/v1/deals/{deal_id}/settlements"): (200, list[DealSettlementDto]),
+    ("POST", "/api/v1/deals/{deal_id}/cash-ready"): (200, DealDetailsResponse),
+    ("POST", "/api/v1/deals/{deal_id}/transfer-adjustment"): (200, DealDetailsResponse),
     ("POST", "/api/v1/deals/{deal_id}/table"): (200, DealDetailsResponse),
     ("POST", "/api/v1/deals/{deal_id}/referrer-spread"): (200, DealDetailsResponse),
     ("PATCH", "/api/v1/deals/{deal_id}"): (200, DealDetailsResponse),
@@ -105,7 +112,13 @@ EXPECTED_ERROR_STATUSES: dict[RouteKey, frozenset[int]] = {
     ("POST", "/api/v1/deals/client-transfers"): frozenset({400, 401, 403, 409}),
     ("POST", "/api/v1/deals/exchanges"): frozenset({400, 401, 403, 409}),
     ("POST", "/api/v1/deals/cash"): frozenset({400, 401, 403, 409}),
+    ("POST", "/api/v1/deals/invoices"): frozenset({400, 401, 403, 409}),
+    ("POST", "/api/v1/deals/{deal_id}/invoice/post"): DEAL_COMMAND_ERRORS,
+    ("POST", "/api/v1/deals/{deal_id}/invoice/cancel"): DEAL_COMMAND_ERRORS,
     ("GET", "/api/v1/deals/{deal_id}"): frozenset({401, 403, 404}),
+    ("GET", "/api/v1/deals/{deal_id}/settlements"): frozenset({401, 403, 404}),
+    ("POST", "/api/v1/deals/{deal_id}/cash-ready"): DEAL_COMMAND_ERRORS,
+    ("POST", "/api/v1/deals/{deal_id}/transfer-adjustment"): DEAL_COMMAND_ERRORS,
     ("POST", "/api/v1/deals/{deal_id}/table"): DEAL_COMMAND_ERRORS,
     ("POST", "/api/v1/deals/{deal_id}/referrer-spread"): DEAL_COMMAND_ERRORS,
     ("PATCH", "/api/v1/deals/{deal_id}"): DEAL_COMMAND_ERRORS,
@@ -138,6 +151,9 @@ def test_openapi_documents_success_and_application_error_schemas() -> None:
         if success_model == dict[str, float]:
             assert success_schema["type"] == "object"
             assert success_schema["additionalProperties"] == {"type": "number"}
+        elif success_model == list[DealSettlementDto]:
+            assert success_schema["type"] == "array"
+            assert success_schema["items"]["$ref"] == "#/components/schemas/DealSettlementDto"
         else:
             assert success_schema["$ref"] == (
                 f"#/components/schemas/{success_model.__name__}"

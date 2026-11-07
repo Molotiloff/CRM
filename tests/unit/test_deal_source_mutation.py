@@ -139,12 +139,18 @@ class FakeRequestSchedule:
         return True
 
 
+class FakeFulfillmentQueue:
+    async def cancel_for_deal(self, *, deal_id: int) -> None:
+        pass
+
+
 class FakeUnitOfWork:
     def __init__(self, deals: FakeDeals) -> None:
         self.deals = FakeTransactionalDeals(deals)
         self.exchange_requests = FakeExchangeRequests()
         self.request_schedule = FakeRequestSchedule()
         self.transactions = object()
+        self.fulfillment_queue = FakeFulfillmentQueue()
         self.committed = False
 
     async def __aenter__(self):

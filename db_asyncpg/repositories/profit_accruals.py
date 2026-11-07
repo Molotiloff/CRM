@@ -42,13 +42,14 @@ class ProfitAccrualsRepo(ConnectionBoundRepo):
         settlement_status: str,
         idempotency_key: str,
         received_at: datetime | None = None,
+        cash_only: bool = False,
     ) -> ProfitAccrual:
         async with self._connection() as connection:
             row = await connection.fetchrow(
                 f"""
                 INSERT INTO profit_usdt_accruals(
-                    deal_id, qty, settlement_status, idempotency_key, received_at
-                ) VALUES ($1, $2, $3, $4, $5)
+                    deal_id, qty, settlement_status, idempotency_key, received_at, capitalization_status
+                ) VALUES ($1, $2, $3, $4, $5, $6)
                 ON CONFLICT (idempotency_key) DO NOTHING
                 RETURNING {_COLUMNS}
                 """,
@@ -57,6 +58,7 @@ class ProfitAccrualsRepo(ConnectionBoundRepo):
                 settlement_status,
                 idempotency_key,
                 received_at,
+                "cash_only" if cash_only else "pending",
             )
             if row is None:
                 row = await connection.fetchrow(

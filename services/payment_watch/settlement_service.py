@@ -42,6 +42,10 @@ class DealSettlementService:
         self._unit_of_work_factory = unit_of_work_factory
         self._fulfillment = fulfillment_queue_service
 
+    async def list_for_deal(self, deal_id: int) -> list[SettlementResult]:
+        async with self._unit_of_work_factory() as unit_of_work:
+            return await unit_of_work.settlements.list_for_deal(deal_id)
+
     async def settle_test(self, transfer: ConfirmedTransfer) -> None:
         """Account for the outgoing test payment without completing the watch."""
         async with self._unit_of_work_factory() as unit_of_work:
@@ -50,6 +54,8 @@ class DealSettlementService:
             )
             if context is None or context.source_kind != "fulfillment":
                 raise SettlementError("Test payment is not linked to a client withdrawal")
+            if context.deal_status == "canceled":
+                raise SettlementError("Сделка отменена; платёж требует отдельной проверки")
             fulfillment = await unit_of_work.fulfillment_queue.get_by_deal_for_update(
                 deal_id=context.deal_id
             )
@@ -94,6 +100,8 @@ class DealSettlementService:
             )
             if context is None:
                 raise SettlementError("Payment watch is not linked to an exchange deal")
+            if context.deal_status == "canceled":
+                raise SettlementError("Сделка отменена; платёж требует отдельной проверки")
 
             fulfillment = await unit_of_work.fulfillment_queue.get_by_deal_for_update(
                 deal_id=context.deal_id

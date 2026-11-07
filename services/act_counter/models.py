@@ -10,3 +10,12 @@ class AppliedExchangeMovement:
     currency_code: str
     direction: str  # IN / OUT relative to request chat stock
     amount: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class ActInvoicePosting:
+    client_id: int
+    account_id: int
+    before: Decimal
+    after: Decimal
+    transaction_id: int | None

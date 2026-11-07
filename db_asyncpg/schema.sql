@@ -1018,7 +1018,7 @@ CREATE TABLE IF NOT EXISTS cash_settlements (
 CREATE TABLE IF NOT EXISTS profit_usdt_accruals (
     id BIGSERIAL PRIMARY KEY,
     deal_id BIGINT NOT NULL REFERENCES deals(id),
-    qty NUMERIC(38,8) NOT NULL CHECK (qty > 0),
+    qty NUMERIC(38,8) NOT NULL CHECK (qty > 0 OR capitalization_status = 'cash_only'),
     valuation_rate NUMERIC(38,8),
     rub_value NUMERIC(38,8),
     quote_source TEXT,
@@ -1026,7 +1026,7 @@ CREATE TABLE IF NOT EXISTS profit_usdt_accruals (
     valuation_actor_id BIGINT REFERENCES users(id),
     valuation_reason TEXT,
     capitalization_status TEXT NOT NULL DEFAULT 'pending' CHECK (
-        capitalization_status IN ('pending', 'capitalized')
+        capitalization_status IN ('pending', 'capitalized', 'cash_only')
     ),
     capitalized_at TIMESTAMPTZ,
     capitalization_move_id BIGINT REFERENCES firm_position_moves(id),
@@ -1051,7 +1051,7 @@ CREATE TABLE IF NOT EXISTS profit_usdt_accruals (
             ))
     ),
     CHECK (
-        (capitalization_status = 'pending' AND capitalized_at IS NULL
+        (capitalization_status IN ('pending', 'cash_only') AND capitalized_at IS NULL
             AND capitalization_move_id IS NULL)
         OR (capitalization_status = 'capitalized' AND valuation_rate IS NOT NULL
             AND capitalized_at IS NOT NULL AND capitalization_move_id IS NOT NULL)
@@ -1059,7 +1059,8 @@ CREATE TABLE IF NOT EXISTS profit_usdt_accruals (
     CHECK (
         (settlement_status = 'in_transit' AND received_at IS NULL)
         OR (settlement_status = 'received' AND received_at IS NOT NULL)
-    )
+    ),
+    CHECK (capitalization_status <> 'cash_only' OR settlement_status = 'received')
 );
 CREATE INDEX IF NOT EXISTS idx_profit_usdt_accruals_pending
     ON profit_usdt_accruals(created_at, id) WHERE capitalization_status = 'pending';

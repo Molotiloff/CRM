@@ -63,6 +63,21 @@ class ClientTransferCreateRequest(BaseModel):
     allowNegative: bool = False
 
 
+class InvoiceCreateRequest(BaseModel):
+    clientId: int = Field(gt=0)
+    city: str = Field(min_length=1, max_length=64)
+    receivedUsdt: Decimal = Field(gt=0, lt=Decimal("1e18"), decimal_places=8)
+    paidUsdt: Decimal = Field(gt=0, lt=Decimal("1e18"), decimal_places=8)
+    idempotencyKey: str = Field(min_length=1, max_length=120)
+    comment: str | None = Field(default=None, max_length=4000)
+
+
+class InvoicePostRequest(BaseModel):
+    expectedReceivedUsdt: Decimal = Field(gt=0, lt=Decimal("1e18"), decimal_places=8)
+    expectedPaidUsdt: Decimal = Field(gt=0, lt=Decimal("1e18"), decimal_places=8)
+    allowLoss: bool = False
+
+
 class ExchangeDealCreateRequest(BaseModel):
     dealType: DealType
     clientId: int = Field(gt=0)
@@ -150,6 +165,26 @@ class DealStatusRequest(BaseModel):
     status: DealStatus
     comment: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+    expectedOldStatus: DealStatus | None = None
+
+
+class ClientTransferAdjustRequest(BaseModel):
+    newAmount: Decimal | None = Field(default=None, gt=0)
+    expectedAmount: Decimal = Field(gt=0)
+    idempotencyKey: str = Field(min_length=1, max_length=128)
+    allowNegative: bool = False
+
+
+class DealSettlementDto(BaseModel):
+    id: int
+    dealId: int
+    expected: str
+    actual: str
+    delta: str
+    status: str
+    resolution: str | None = None
+    currency: str | None = None
+    txHash: str | None = None
 
 
 class SettlementReplacementRequest(BaseModel):

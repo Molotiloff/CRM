@@ -15,9 +15,9 @@ class DealWorkflowRepository(ConnectionBoundRepo):
             row = await con.fetchrow(
                 """
                 WITH queue AS (
-                    SELECT COALESCE(SUM(qty), 0) AS queued_qty
-                    FROM usdt_fulfillment_queue
-                    WHERE status IN ('queued', 'executing')
+                    SELECT COALESCE(SUM(q.qty), 0) AS queued_qty
+                    FROM usdt_fulfillment_queue q JOIN deals active ON active.id=q.deal_id
+                    WHERE q.status IN ('queued', 'executing') AND active.status NOT IN ('done', 'canceled')
                 ), fact AS (
                     SELECT COALESCE((
                         SELECT actual_qty
@@ -43,6 +43,7 @@ class DealWorkflowRepository(ConnectionBoundRepo):
                 CROSS JOIN queue
                 CROSS JOIN fact
                 WHERE d.id = $1
+                  AND d.status NOT IN ('done', 'canceled')
                   AND item.status IN ('queued', 'executing')
                 """,
                 deal_id,

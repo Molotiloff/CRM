@@ -13,11 +13,13 @@ from api.openapi import error_responses
 from api.presentation.deals import build_deal_details, build_deals_page
 from api.schemas.deals import (
     CashDealCreateRequest,
+    ClientTransferAdjustRequest,
     ClientTransferCreateRequest,
     DealCancelRequest,
     DealCreateRequest,
     DealDetailsResponse,
     DealFormContextDto,
+    DealSettlementDto,
     DealSourceEditRequest,
     DealsPageResponse,
     DealStatus,
@@ -25,15 +27,21 @@ from api.schemas.deals import (
     DealType,
     DealUpdateRequest,
     ExchangeDealCreateRequest,
+    InvoiceCreateRequest,
+    InvoicePostRequest,
     ReferrerSpreadPayRequest,
     SettlementResolutionResponse,
     SettlementReviewResolutionRequest,
 )
+from domain import DealStatus as DomainDealStatus
 from domain import DomainStateError, DomainValidationError
 from domain.accounting_flows import SettlementResolution as DomainSettlementResolution
 from services.cash_requests.create_cash_request import CreateCashRequest, CreateCashRequestParams
 from services.cash_requests.parsing import ParsedRequest
-from services.crm.client_transfer_service import ClientTransferCommand
+from services.crm.client_transfer_service import (
+    ClientTransferAdjustmentCommand,
+    ClientTransferCommand,
+)
 from services.crm.deal_service import (
     DealCreateCommand,
     DealListFilter,
@@ -46,6 +54,7 @@ from services.crm.deal_source_mutation import (
     DealSourceMutationService,
     ExchangeSourceEdit,
 )
+from services.crm.invoice_service import CreateInvoice
 from services.crm.telegram_deal_registrar import exchange_type_from_firm_perspective
 from services.exchange.create_exchange_request import CreateExchangeParams
 from services.messaging import ClientChatReplier, DeferredMessenger
@@ -63,6 +72,28 @@ _cash_creation_lock = asyncio.Lock()
 
 def get_deal_service(request: Request) -> DealService:
     return request.app.state.deal_service
+
+
+@router.post("/deals/invoices", response_model=DealDetailsResponse, status_code=201, responses=error_responses(400, 401, 403, 409))
+async def create_invoice(payload: InvoiceCreateRequest, request: Request, user: ApiUser = Depends(require_role(UserRole.manager))) -> DealDetailsResponse:
+    deal = await request.app.state.container.crm.invoices.create(CreateInvoice(
+        received=payload.receivedUsdt, paid=payload.paidUsdt, city=payload.city, client_id=payload.clientId,
+        actor_user_id=user.id, idempotency_key=payload.idempotencyKey, comment=payload.comment,
+    ))
+    return build_deal_details(deal)
+
+
+@router.post("/deals/{deal_id}/invoice/post", response_model=DealDetailsResponse, responses=error_responses(400, 401, 403, 404, 409))
+async def post_invoice(deal_id: int, payload: InvoicePostRequest, request: Request, user: ApiUser = Depends(require_role(UserRole.manager))) -> DealDetailsResponse:
+    deal = await request.app.state.container.crm.invoices.post(deal_id, actor_user_id=user.id,
+        expected_received=payload.expectedReceivedUsdt, expected_paid=payload.expectedPaidUsdt, allow_loss=payload.allowLoss)
+    return build_deal_details(deal)
+
+
+@router.post("/deals/{deal_id}/invoice/cancel", response_model=DealDetailsResponse, responses=error_responses(400, 401, 403, 404, 409))
+async def cancel_invoice(deal_id: int, payload: DealCancelRequest, request: Request, user: ApiUser = Depends(require_role(UserRole.manager))) -> DealDetailsResponse:
+    deal = await request.app.state.container.crm.invoices.cancel(deal_id, actor_user_id=user.id, comment=payload.comment)
+    return build_deal_details(deal)
 
 
 @router.get(
@@ -428,6 +459,77 @@ async def get_deal(
 
 
 @router.post(
+    "/deals/{deal_id}/transfer-adjustment", response_model=DealDetailsResponse,
+    responses=error_responses(400, 401, 403, 404, 409),
+)
+async def adjust_client_transfer(
+    deal_id: int, payload: ClientTransferAdjustRequest, request: Request,
+    user: ApiUser = Depends(require_role(UserRole.manager)),
+    service: DealService = Depends(get_deal_service),
+) -> DealDetailsResponse:
+    deal = await service.get_deal(deal_id)
+    if str(deal.source_kind) != "client_transfer" or str(deal.deal_type) != "client_transfer":
+        raise DomainValidationError("Это не перевод между клиентами")
+    container = request.app.state.container
+    if isinstance(container.messenger, DeferredMessenger):
+        raise DomainStateError("Отправка чеков в Telegram сейчас недоступна")
+    if deal.client_chat_id is None:
+        raise DomainValidationError("Чат отправителя не найден")
+    await container.crm.client_transfer_workflow.adjust(ClientTransferAdjustmentCommand(
+        deal_id=deal_id, from_chat_id=deal.client_chat_id,
+        source_ref=f"crm:{user.id}:{payload.idempotencyKey}", new_amount=payload.newAmount,
+        actor_tg_user_id=user.tg_user_id, allow_negative=payload.allowNegative,
+        expected_amount=payload.expectedAmount,
+    ))
+    return build_deal_details(await service.get_deal(deal_id))
+
+
+@router.post(
+    "/deals/{deal_id}/cash-ready", response_model=DealDetailsResponse,
+    responses=error_responses(400, 401, 403, 404, 409),
+)
+async def mark_cash_deal_ready(
+    deal_id: int, request: Request,
+    user: ApiUser = Depends(require_role(UserRole.manager)),
+    service: DealService = Depends(get_deal_service),
+) -> DealDetailsResponse:
+    deal = await service.get_deal(deal_id)
+    if str(deal.source_kind) != "cash":
+        raise DomainValidationError("Это не кассовая заявка")
+    if str(deal.status) not in {"new", "ready_for_cash_settlement"}:
+        raise DomainStateError("Статус кассовой заявки изменился, обновите страницу")
+    await request.app.state.container.accounting.cash_settlements.mark_ready(
+        request_id=str(deal.body.get("req_id") or ""), actor_tg_user_id=user.tg_user_id,
+    )
+    updated = await service.get_deal(deal_id)
+    if str(deal.status) == "new":
+        await service.publish_committed_status_change(
+            updated, new_status=DomainDealStatus.READY_FOR_CASH_SETTLEMENT,
+            payload={"actorTgUserId": user.tg_user_id},
+        )
+    return build_deal_details(updated)
+
+
+@router.get(
+    "/deals/{deal_id}/settlements", response_model=list[DealSettlementDto],
+    responses=error_responses(401, 403, 404),
+)
+async def list_deal_settlements(
+    deal_id: int, _: ApiUser = Depends(require_role(UserRole.manager)),
+    deals: DealService = Depends(get_deal_service),
+    service: DealSettlementService = Depends(get_settlement_service),
+) -> list[DealSettlementDto]:
+    await deals.get_deal(deal_id)
+    return [DealSettlementDto(
+        id=item.settlement_id, dealId=item.deal_id, expected=str(item.expected),
+        actual=str(item.actual), delta=str(item.delta), status=str(item.status),
+        resolution=str(item.resolution) if item.resolution else None,
+        currency=item.evidence.token_symbol if item.evidence else None,
+        txHash=item.evidence.tx_hash if item.evidence else None,
+    ) for item in await service.list_for_deal(deal_id)]
+
+
+@router.post(
     "/deals/{deal_id}/table",
     response_model=DealDetailsResponse,
     responses=error_responses(
@@ -550,6 +652,7 @@ async def change_deal_status(
             status=payload.status.value,
             actor_user_id=user.id,
             payload=event_payload,
+            expected_old_status=payload.expectedOldStatus,
         ),
     )
     return build_deal_details(row)

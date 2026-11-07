@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from html import escape
 
 from services.messaging import MessengerPort
@@ -8,7 +9,12 @@ from services.number_formatting import format_amount_core
 from services.receipts import ReceiptImageBuilder, ReceiptRow
 from services.receipts.image import format_receipt_datetime
 
-from .client_transfer_models import ClientTransferCommand, ClientTransferResult
+from .client_transfer_models import (
+    ClientTransferAdjustmentCommand,
+    ClientTransferAdjustmentResult,
+    ClientTransferCommand,
+    ClientTransferResult,
+)
 from .client_transfer_service import ClientTransferService
 
 log = logging.getLogger(__name__)
@@ -37,6 +43,51 @@ class ClientTransferWorkflow:
         result = await self._service.transfer(command)
         await self._notify(result, reply_to_message_id=reply_to_message_id)
         return result
+
+    async def adjust(self, command: ClientTransferAdjustmentCommand) -> ClientTransferAdjustmentResult:
+        result = await self._service.adjust(command)
+        await self.notify_adjustment(result, from_chat_id=command.from_chat_id)
+        return result
+
+    async def notify_adjustment(
+        self, result: ClientTransferAdjustmentResult, *, from_chat_id: int,
+        changed_at: datetime | None = None,
+    ) -> None:
+        if result.repeated:
+            return
+        status = "отменён" if result.canceled else "изменён"
+        if not result.canceled:
+            try:
+                receipt = self._receipt_builder.build(
+                    amount=result.new_amount, currency=result.currency, precision=result.precision,
+                    rows=(
+                        ReceiptRow("Статус", "Изменено", accent=True),
+                        ReceiptRow("Номер операции", f"#{result.deal_id}"),
+                        ReceiptRow("Отправитель", result.from_client_name),
+                        ReceiptRow("Получатель", result.to_client_name),
+                        ReceiptRow("Дата и время", format_receipt_datetime(changed_at or datetime.now(UTC))),
+                    ),
+                )
+            except Exception:
+                log.exception("Failed to build corrected transfer receipt deal_id=%s", result.deal_id)
+            else:
+                for chat_id in (from_chat_id, result.to_chat_id):
+                    try:
+                        await self._messenger.send_photo(
+                            chat_id, receipt, filename=f"client_transfer_{result.deal_id}_updated.png",
+                            caption=f"Перевод #{result.deal_id}",
+                        )
+                    except Exception:
+                        log.exception("Failed to send corrected transfer receipt deal_id=%s", result.deal_id)
+        for chat_id, balance in ((from_chat_id, result.from_balance), (result.to_chat_id, result.to_balance)):
+            try:
+                await self._messenger.send(
+                    chat_id, f"Перевод #{result.deal_id} {status}.\n"
+                    f"Сумма: {format_amount_core(result.new_amount, result.precision)} {result.currency}\n"
+                    f"Баланс: {format_amount_core(balance, result.precision)} {result.currency}",
+                )
+            except Exception:
+                log.exception("Failed to notify transfer adjustment deal_id=%s", result.deal_id)
 
     async def _notify(
         self,

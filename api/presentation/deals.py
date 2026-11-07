@@ -107,6 +107,8 @@ def _deal_item(row: Deal) -> DealItemDto:
         direction=_deal_direction(str(row.deal_type), body),
         amountRub=_deal_amount_rub(str(row.deal_type), body, status=status),
         exchangeAmount=(
+            f"{body.get('received_usdt')} → {body.get('paid_usdt')} USDT"
+            if str(row.deal_type) == "invoice" and body.get("received_usdt") else
             f"{body.get('recv_amount')} {body.get('recv_code')} → "
             f"{body.get('pay_amount')} {body.get('pay_code')}"
             if str(row.deal_type) == "conversion" and body.get("recv_code") and body.get("pay_code")
@@ -146,6 +148,8 @@ def _deal_type_label(deal_type: str) -> str:
 
 
 def _deal_asset(deal_type: str, body: Mapping[str, Any]) -> str:
+    if deal_type == "invoice":
+        return "USDT"
     if deal_type in {"sale", "purchase", "conversion"}:
         non_rub = _exchange_foreign_currency(body)
         if non_rub:
@@ -204,6 +208,8 @@ def _deal_amount_rub(
 
 
 def _deal_direction(deal_type: str, body: Mapping[str, Any]) -> str:
+    if deal_type == "invoice":
+        return "Партнёр → клиент (USDT)"
     if deal_type in {"sale", "purchase", "conversion"}:
         received = str(body.get("recv_code") or "").upper()
         paid = str(body.get("pay_code") or "").upper()

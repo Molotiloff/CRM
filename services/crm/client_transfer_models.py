@@ -46,6 +46,7 @@ class ClientTransferAdjustmentCommand:
     new_amount: Decimal | None  # None cancels the transfer.
     actor_tg_user_id: int | None = None
     allow_negative: bool = False
+    expected_amount: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -51,6 +51,7 @@ from db_asyncpg.repositories.cash_chat_registry import CashChatRegistryRepo
 from db_asyncpg.repositories.client_transfers import ClientTransferRepository
 from db_asyncpg.repositories.deal_workflow import DealWorkflowRepository
 from db_asyncpg.repositories.deals import DealRepository
+from db_asyncpg.repositories.invoices import InvoiceRepository
 from db_asyncpg.repositories.message_archive import MessageArchiveRepo
 from db_asyncpg.repositories.shadow_comparisons import ShadowComparisonsRepo
 from db_asyncpg.repositories.tg_outbox import TgOutboxRepository
@@ -90,6 +91,8 @@ from services.crm.deal_source_adapter import DealSourceAdapterRegistry
 from services.crm.deal_source_mutation import DealSourceMutationService
 from services.crm.deal_status_policy import DealStatusPolicy
 from services.crm.exchange_deal_source_adapter import ExchangeDealSourceAdapter
+from services.crm.fulfillment_deal_source_adapter import FulfillmentDealSourceAdapter
+from services.crm.invoice_service import InvoiceService
 from services.crm.telegram_deal_registrar import TelegramDealRegistrar
 from services.exchange.accept_short_service import AcceptShortService
 from services.exchange.balance_service import ExchangeBalanceService
@@ -172,6 +175,7 @@ class CrmRepositories:
 
 @dataclass(frozen=True, slots=True)
 class CrmServices:
+    invoices: InvoiceService
     event_bus: DealEventBus
     deals: DealService
     telegram_registrar: TelegramDealRegistrar
@@ -420,6 +424,7 @@ class ApplicationContainer:
                         repository=crm_repositories.deal_sources,
                         cash_edit=cash_source_edit,
                     ),
+                    FulfillmentDealSourceAdapter(),
                 )
             ),
         )
@@ -447,6 +452,7 @@ class ApplicationContainer:
             operational_repositories=operational,
             crm_repositories=crm_repositories,
             crm=CrmServices(
+                invoices=InvoiceService(InvoiceRepository(pool, request_chat_id=config.request_chat_id), event_bus),
                 event_bus=event_bus,
                 deals=deal_service,
                 telegram_registrar=telegram_registrar,

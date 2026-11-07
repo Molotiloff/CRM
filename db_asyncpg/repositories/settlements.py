@@ -23,6 +23,13 @@ class BlockchainEventAlreadyClaimedError(RuntimeError):
 class DealSettlementRepo(ConnectionBoundRepo):
     async def get_context_for_update(self, *, watch_id: int) -> SettlementContext | None:
         async with self._connection() as con:
+            # Source mutation UoWs already lock their deal when reading it.
+            # Match that order explicitly; joined FOR UPDATE is not ordered.
+            deal_id = await con.fetchval("SELECT deal_id FROM payment_watches WHERE id=$1", watch_id)
+            if deal_id is not None:
+                await con.fetchval("SELECT id FROM deals WHERE id=$1 FOR UPDATE", deal_id)
+            if await con.fetchval("SELECT id FROM payment_watches WHERE id=$1 FOR UPDATE", watch_id) is None:
+                return None
             row = await con.fetchrow(
                 """
                 SELECT d.id AS deal_id, d.status AS deal_status, d.client_id,
@@ -94,6 +101,19 @@ class DealSettlementRepo(ConnectionBoundRepo):
                 f"Blockchain event {transfer.tx_hash} belongs to another payment watch"
             )
         return PaymentEventClaim(int(existing["id"]), int(existing["watch_id"]), False)
+
+    async def list_for_deal(self, deal_id: int) -> list[SettlementResult]:
+        async with self._connection() as con:
+            rows = await con.fetch(
+                """SELECT ds.*, ds.evidence::text AS evidence,
+                          pwe.watch_id, pwe.tx_hash, pwe.direction AS event_direction,
+                          pwe.amount AS event_amount, pwe.token_symbol,
+                          pwe.confirmations, pwe.block_ts
+                   FROM deal_settlements ds
+                   JOIN payment_watch_events pwe ON pwe.id=ds.payment_event_id
+                   WHERE ds.deal_id=$1 ORDER BY ds.id DESC""", deal_id,
+            )
+        return [_result(row, created=False) for row in rows]
 
     async def get_by_event(self, *, event_id: int) -> SettlementResult | None:
         async with self._connection() as con:

@@ -120,7 +120,7 @@ class DealRepository(ConnectionBoundRepo):
                     return None
                 if not row["is_table_done"]:
                     raise DomainStateError("Заявка ещё не занесена в таблицу")
-                if row["deal_type"] not in {"sale", "purchase"}:
+                if row["deal_type"] not in {"sale", "purchase", "conversion"}:
                     return None
                 if row["status"] not in {"new", "done"}:
                     raise DomainStateError("Сделка уже перешла в другой статус")

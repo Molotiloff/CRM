@@ -24,6 +24,44 @@ _ITEM_COLUMNS = """
 class FulfillmentQueueRepo(ConnectionBoundRepo):
     _SEQUENCE_STEP = 1024
 
+    async def cancel_for_deal(self, *, deal_id: int) -> None:
+        """Used within the source-cancellation UoW, before any ledger reversal."""
+        async with self._connection() as con:
+            # Match settlement/source mutation lock order: deal, watch, queue.
+            status = await con.fetchval("SELECT status FROM deals WHERE id=$1 FOR UPDATE", deal_id)
+            watches = await con.fetch(
+                """SELECT id, status FROM payment_watches
+                   WHERE deal_id=$1 OR id IN (
+                       SELECT payment_watch_id FROM usdt_fulfillment_queue WHERE deal_id=$1
+                   ) ORDER BY id FOR UPDATE""", deal_id,
+            )
+            if status in {"done", "canceled"}:
+                raise DomainStateError("Сделка уже завершена или отменена; обновите страницу")
+            items = await con.fetch(
+                """SELECT status, payment_event_id FROM usdt_fulfillment_queue
+                   WHERE deal_id=$1 ORDER BY id FOR UPDATE""", deal_id,
+            )
+            watch_ids = [int(watch["id"]) for watch in watches]
+            has_events = await con.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM payment_watch_events WHERE watch_id=ANY($1::bigint[]))",
+                watch_ids,
+            )
+            has_settlement = await con.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM deal_settlements WHERE deal_id=$1)", deal_id,
+            )
+            if has_events or has_settlement or any(
+                watch["status"] not in {"WATCHING", "TIMED_OUT", "STOPPED"} for watch in watches
+            ) or any(item["status"] == "completed" or item["payment_event_id"] is not None for item in items):
+                raise DomainStateError("По заявке уже обнаружена транзакция. Обычная отмена недоступна; проверьте платёж")
+            await con.execute(
+                """UPDATE payment_watches SET status='STOPPED', stopped_at=NOW()
+                   WHERE id=ANY($1::bigint[]) AND status IN ('WATCHING', 'TIMED_OUT')""", watch_ids,
+            )
+            await con.execute(
+                """UPDATE usdt_fulfillment_queue SET status='canceled', cancel_reason='Отмена сделки из CRM'
+                   WHERE deal_id=$1 AND status IN ('queued', 'executing')""", deal_id,
+            )
+
     async def acquire_client_lock(self, chat_id: int) -> None:
         async with self._connection() as connection:
             await connection.execute(
@@ -121,10 +159,10 @@ class FulfillmentQueueRepo(ConnectionBoundRepo):
         async with self._connection() as connection:
             rows = await connection.fetch(
                 f"""
-                SELECT {_ITEM_COLUMNS}
-                FROM usdt_fulfillment_queue
-                WHERE status IN ('queued', 'executing')
-                ORDER BY sequence_no, id
+                SELECT {_qualified_columns('q')}
+                FROM usdt_fulfillment_queue q JOIN deals d ON d.id=q.deal_id
+                WHERE q.status IN ('queued', 'executing') AND d.status NOT IN ('done', 'canceled')
+                ORDER BY q.sequence_no, q.id
                 """
             )
         return [self._item(row) for row in rows]
@@ -134,11 +172,11 @@ class FulfillmentQueueRepo(ConnectionBoundRepo):
             await self._acquire_order_lock(connection)
             rows = await connection.fetch(
                 """
-                SELECT id
-                FROM usdt_fulfillment_queue
-                WHERE status IN ('queued', 'executing')
-                ORDER BY sequence_no, id
-                FOR UPDATE
+                SELECT q.id
+                FROM usdt_fulfillment_queue q JOIN deals d ON d.id=q.deal_id
+                WHERE q.status IN ('queued', 'executing') AND d.status NOT IN ('done', 'canceled')
+                ORDER BY q.sequence_no, q.id
+                FOR UPDATE OF q
                 """
             )
             item_ids = [int(row["id"]) for row in rows]
@@ -185,9 +223,9 @@ class FulfillmentQueueRepo(ConnectionBoundRepo):
             row = await connection.fetchrow(
                 """
                 SELECT COALESCE((
-                           SELECT SUM(qty)
-                           FROM usdt_fulfillment_queue
-                           WHERE status IN ('queued', 'executing')
+                           SELECT SUM(q.qty)
+                           FROM usdt_fulfillment_queue q JOIN deals d ON d.id=q.deal_id
+                           WHERE q.status IN ('queued', 'executing') AND d.status NOT IN ('done', 'canceled')
                        ), 0) AS queued_qty,
                        (
                            SELECT actual_qty
@@ -248,6 +286,7 @@ class FulfillmentQueueRepo(ConnectionBoundRepo):
                 JOIN clients c ON c.id = d.client_id
                 WHERE c.chat_id = $1
                   AND q.status = 'queued'
+                  AND d.status NOT IN ('done', 'canceled')
                   AND ($2::numeric IS NULL OR q.qty = $2)
                 ORDER BY q.sequence_no, q.id
                 FOR UPDATE OF q SKIP LOCKED
@@ -262,9 +301,9 @@ class FulfillmentQueueRepo(ConnectionBoundRepo):
         async with self._connection() as connection:
             value = await connection.fetchval(
                 """
-                SELECT COALESCE(SUM(qty), 0)
-                FROM usdt_fulfillment_queue
-                WHERE status = 'executing'
+                SELECT COALESCE(SUM(q.qty), 0)
+                FROM usdt_fulfillment_queue q JOIN deals d ON d.id=q.deal_id
+                WHERE q.status = 'executing' AND d.status NOT IN ('done', 'canceled')
                 """
             )
         return Decimal(str(value))

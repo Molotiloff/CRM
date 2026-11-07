@@ -169,8 +169,10 @@ class DashboardReadRepository(ConnectionBoundRepo):
                           WHERE status IN ('queued', 'executing')) AS queued_usdt_qty,
                         (SELECT COALESCE(SUM(qty), 0) FROM profit_usdt_accruals accrual
                           JOIN deals deal ON deal.id = accrual.deal_id
-                          WHERE accrual.capitalization_status = 'pending'
-                            AND deal.deal_at = $1) AS deal_profit_qty,
+                          WHERE (
+                            (accrual.capitalization_status = 'cash_only' AND deal.status = 'done')
+                            OR (accrual.capitalization_status = 'pending' AND deal.deal_at = $1)
+                          )) AS deal_profit_qty,
                         (SELECT COALESCE(SUM(qty), 0) FROM profit_usdt_accruals
                           WHERE settlement_status = 'in_transit') AS profit_in_transit_qty
                     """,

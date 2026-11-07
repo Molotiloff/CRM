@@ -26,6 +26,8 @@ class ExchangeDealSourceEditPlan:
     source: ExchangeRequestSource
     request_text: str
     update_command: DealUpdateCommand
+    recv_is_deposit: bool
+    pay_is_withdraw: bool
 
     async def apply(self, unit_of_work: UnitOfWorkPort) -> None:
         message = self.source.primary_message
@@ -43,8 +45,8 @@ class ExchangeDealSourceEditPlan:
             chat_id=message.chat_id,
             target_bot_msg_id=message.message_id,
             cmd_msg_id=self.command.operation_id,
-            recv_is_deposit=True,
-            pay_is_withdraw=True,
+            recv_is_deposit=self.recv_is_deposit,
+            pay_is_withdraw=self.pay_is_withdraw,
             unit_of_work=unit_of_work,
         )
         await unit_of_work.exchange_requests.upsert_exchange_request_link(
@@ -115,6 +117,8 @@ class ExchangeDealSourceAdapter:
             command=command,
             source=source,
             request_text=request_text,
+            recv_is_deposit=_original_leg_flag(deal, "recv_is_deposit", self._request_chat_id),
+            pay_is_withdraw=_original_leg_flag(deal, "pay_is_withdraw", self._request_chat_id),
             update_command=DealUpdateCommand(
                 body=updated_body,
                 comment=command.note,
@@ -122,6 +126,7 @@ class ExchangeDealSourceAdapter:
         )
 
     async def cancel(self, unit_of_work: UnitOfWorkPort, deal: Deal) -> None:
+        await unit_of_work.fulfillment_queue.cancel_for_deal(deal_id=deal.id)
         body = ExchangeDealBody.from_body(deal.body)
         req_id = deal.exchange_client_req_id or body.request_id
         source = await self._source(req_id)

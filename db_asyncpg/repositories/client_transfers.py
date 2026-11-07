@@ -310,6 +310,8 @@ class ClientTransferRepository:
                     old_amount = Decimal(str(prior["old_amount"]))
                 else:
                     old_amount = Decimal(str(body["amount"]))
+                    if command.expected_amount is not None and old_amount != command.expected_amount:
+                        raise DomainStateError("Сумма перевода изменилась, обновите страницу")
                 delta = new_amount - old_amount
                 starting_from_balance = Decimal(str(debit["balance"]))
                 from_balance = starting_from_balance - (delta if not repeated else 0)

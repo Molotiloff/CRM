@@ -291,6 +291,8 @@ class DealService:
     @logged_operation("deal.create")
     @measured_operation("deal.create")
     async def create_deal(self, command: DealCreateCommand) -> Deal:
+        if command.deal_type is DealType.INVOICE:
+            raise DealValidationError("Используйте операцию создания инвойса")
         if command.deal_type is DealType.CLIENT_TRANSFER:
             raise DealValidationError("Используйте операцию перевода между клиентами")
         deal = await self._repository.create_deal(command)
@@ -330,6 +332,8 @@ class DealService:
     @measured_operation("deal.update")
     async def update_deal(self, deal_id: int, command: DealUpdateCommand) -> Deal:
         bind_log_context(deal_id=deal_id)
+        if (await self.get_deal(deal_id)).deal_type is DealType.INVOICE:
+            raise DealValidationError("Для изменения инвойса отмените новую заявку и создайте другую")
         if (await self.get_deal(deal_id)).deal_type is DealType.CLIENT_TRANSFER:
             raise DealValidationError("Проведённый перевод нельзя редактировать")
         deal = await self._repository.update_deal(deal_id, command)
@@ -348,9 +352,13 @@ class DealService:
         command: DealStatusCommand,
     ) -> Deal:
         bind_log_context(deal_id=deal_id)
+        if (await self.get_deal(deal_id)).deal_type is DealType.INVOICE:
+            raise DealValidationError("Используйте проведение или отмену инвойса")
         status_command = command
         if self._status_policy is not None:
             current = await self.get_deal(deal_id)
+            if command.expected_old_status is not None and current.status != command.expected_old_status:
+                raise DealStatusConflictError("Статус сделки изменился, обновите страницу")
             status = DealStatus(command.status)
             payload = (
                 command.payload

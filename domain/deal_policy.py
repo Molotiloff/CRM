@@ -75,6 +75,8 @@ class DealTransitionPolicy:
         status: DealStatus,
         source_kind: SourceKind | None,
     ) -> tuple[DealStatus, ...]:
+        if source_kind is SourceKind.INVOICE:
+            return (DealStatus.DONE, DealStatus.CANCELED) if status is DealStatus.NEW else ()
         graph = cls._EXCHANGE if source_kind is SourceKind.EXCHANGE else cls._GENERAL
         allowed = graph.get(status, frozenset())
         return tuple(item for item in cls._ORDER if item in allowed)

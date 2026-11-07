@@ -150,9 +150,9 @@ class DealSourceMutationService:
     async def _editable_deal(self, deal_id: int, source_kind: SourceKind) -> Deal:
         deal = await self._deals.get_deal(deal_id)
         if deal.source is not DealSource.TELEGRAM and not (
-            deal.source is DealSource.CRM and deal.source_kind is SourceKind.CASH
+            deal.source is DealSource.CRM and deal.source_kind in {SourceKind.CASH, SourceKind.EXCHANGE}
         ):
-            raise DealValidationError("Only Telegram-backed or CRM cash deals can be edited")
+            raise DealValidationError("Only Telegram-backed or CRM source deals can be edited")
         if deal.source_kind is not source_kind:
             raise DealValidationError(f"Deal is not a {source_kind} Telegram request")
         if deal.is_terminal:
