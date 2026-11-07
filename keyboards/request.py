@@ -7,8 +7,10 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from services.cash_requests.constants import (
     CB_DEAL_CANCEL,
     CB_DEAL_DONE,
-    CB_DEAL_READY,
     CB_ISSUE_DONE,
+)
+from services.cash_requests.constants import (
+    CB_DEAL_READY as CB_DEAL_READY,
 )
 
 CB_PARTNER = "req:partner"
@@ -22,12 +24,6 @@ CB_TABLE_DEL_NO = "req:table_del:no"
 def deal_kb(req_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Готово к расчету",
-                    callback_data=f"{CB_DEAL_READY}{req_id}",
-                )
-            ],
             [
                 InlineKeyboardButton(
                     text="Сделка отменена",

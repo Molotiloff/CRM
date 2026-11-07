@@ -36,7 +36,6 @@ async def test_office_deposit_updates_cash_and_client_without_position(
         amount=Decimal("1000"),
     )
     service = _service(pool)
-    await service.mark_ready(request_id="Б-100001", actor_tg_user_id=77)
 
     result = await service.settle(_command("Б-100001", Decimal("1000")))
 
@@ -69,13 +68,12 @@ async def test_office_deposit_updates_cash_and_client_without_position(
         )
         assert [row["new_status"] for row in events] == [
             "new",
-            "ready_for_cash_settlement",
             "done",
         ]
         assert json.loads(events[1]["payload"])["actorTgUserId"] == 77
         assert await connection.fetchval(
             "SELECT COUNT(*) FROM tg_outbox WHERE kind = 'deal_status_changed'"
-        ) == 2
+        ) == 1
 
 
 async def test_office_withdrawal_succeeds_without_firm_position(
@@ -105,7 +103,6 @@ async def test_office_withdrawal_succeeds_without_firm_position(
         amount=Decimal("125"),
     )
     service = _service(pool)
-    await service.mark_ready(request_id="Б-100002", actor_tg_user_id=77)
 
     result = await service.settle(_command("Б-100002", Decimal("-125")))
 
@@ -127,7 +124,6 @@ async def test_duplicate_command_is_idempotent(pool, repo, client_id) -> None:
         amount=Decimal("1000"),
     )
     service = _service(pool)
-    await service.mark_ready(request_id="Б-100003", actor_tg_user_id=77)
     command = _command("Б-100003", Decimal("1000"))
 
     first = await service.settle(command)
@@ -196,7 +192,6 @@ async def test_wrong_city_or_request_does_not_write(pool, repo, client_id) -> No
         amount=Decimal("1000"),
     )
     service = _service(pool)
-    await service.mark_ready(request_id="Б-100004", actor_tg_user_id=77)
 
     with pytest.raises(CashSettlementError, match="активной кассе"):
         await service.settle(
@@ -222,7 +217,6 @@ async def test_failure_on_client_leg_rolls_back_cash_leg(
         amount=Decimal("1000"),
     )
     service = _service(pool)
-    await service.mark_ready(request_id="Б-100005", actor_tg_user_id=77)
     original = TransactionsRepo.deposit
 
     async def fail_client(self, **kwargs):
@@ -267,7 +261,6 @@ async def test_insufficient_cash_leaves_both_balances_unchanged(
         amount=Decimal("125"),
     )
     service = _service(pool)
-    await service.mark_ready(request_id="Б-100006", actor_tg_user_id=77)
 
     with pytest.raises(CashSettlementError, match="Недостаточно USD в кассе"):
         await service.settle(_command("Б-100006", Decimal("-125")))
@@ -326,6 +319,7 @@ async def _deal(
     kind: str,
     amount: Decimal,
     currency: str = "USD",
+    source: str = "tg_bot",
 ) -> int:
     deal, _ = await DealRepository(pool).create_deal_idempotent(
         DealCreateCommand(
@@ -333,7 +327,7 @@ async def _deal(
             city="екб",
             actor_user_id=None,
             client_id=client_id,
-            source="tg_bot",
+            source=source,
             source_kind="cash",
             source_ref=f"{CLIENT_CHAT}:{request_id}",
             body={

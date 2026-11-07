@@ -157,7 +157,7 @@ async def test_schedule_coordinator_owns_upsert_remove_and_board_sync() -> None:
     assert synced == ["екб", "екб"]
 
 
-async def test_cash_card_requires_ready_then_linked_settlement_before_done() -> None:
+async def test_legacy_ready_callback_requires_actual_settlement_before_done() -> None:
     router = RequestRouterService(
         request_chat_id=-100,
         city_cash_chats={"екб": -200},

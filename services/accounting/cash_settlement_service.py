@@ -198,7 +198,7 @@ class CashSettlementService:
                 context.deal_id,
                 DealStatusCommand(
                     status=DealStatus.DONE,
-                    expected_old_status=DealStatus.READY_FOR_CASH_SETTLEMENT,
+                    expected_old_status=context.deal_status,
                     actor_user_id=None,
                     payload={
                         "requestId": request_id,
@@ -226,9 +226,9 @@ class CashSettlementService:
         currency: str,
         signed_qty: Decimal,
     ) -> None:
-        if context.deal_status is not DealStatus.READY_FOR_CASH_SETTLEMENT:
+        if context.deal_status not in {DealStatus.NEW, DealStatus.READY_FOR_CASH_SETTLEMENT}:
             raise CashSettlementError(
-                "Сначала нажмите «Готово к расчету» в карточке заявки."
+                f"Заявка {context.request_id} имеет статус {context.deal_status}; проведение недоступно."
             )
         if currency != context.currency:
             raise CashSettlementError(
