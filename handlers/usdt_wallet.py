@@ -19,10 +19,16 @@ class UsdtWalletHandler:
     # --- показать адрес ---
     async def _cmd_show(self, message: Message) -> None:
         # просмотр доступен всем
-        await message.answer(await self.service.build_show_message(), parse_mode="HTML")
+        await self._show_wallet(message, wallet_slot=1)
 
     async def _cmd_show2(self, message: Message) -> None:
-        await message.answer(await self.service.build_show_message(wallet_slot=2), parse_mode="HTML")
+        await self._show_wallet(message, wallet_slot=2)
+
+    async def _cmd_show_thai(self, message: Message) -> None:
+        await self._show_wallet(message, wallet_slot="thai")
+
+    async def _show_wallet(self, message: Message, *, wallet_slot: WalletSlot) -> None:
+        await message.answer(await self.service.build_show_message(wallet_slot=wallet_slot), parse_mode="HTML")
 
     # --- задать адрес ---
     async def _cmd_set(self, message: Message) -> None:
@@ -30,6 +36,9 @@ class UsdtWalletHandler:
 
     async def _cmd_set2(self, message: Message) -> None:
         await self._set_wallet(message, wallet_slot=2)
+
+    async def _cmd_set_thai(self, message: Message) -> None:
+        await self._set_wallet(message, wallet_slot="thai")
 
     async def _set_wallet(self, message: Message, *, wallet_slot: WalletSlot) -> None:
         # менять можно только из админского чата
@@ -40,9 +49,11 @@ class UsdtWalletHandler:
         await message.answer(await self.service.set_from_text(message.text or "", wallet_slot=wallet_slot))
 
     def _register(self) -> None:
-        # показать: /кош и /usdt
+        # Показать каждый кошелёк, включая алиасы тайского.
         self.router.message.register(self._cmd_show, Command("кош"))
         self.router.message.register(self._cmd_show2, Command("кош2"))
-        # задать: /setкош и /setwallet
+        self.router.message.register(self._cmd_show_thai, Command("коштай", "кошт"))
+        # Изменение адресов использует общую проверку админского чата.
         self.router.message.register(self._cmd_set, Command("setwallet"))
         self.router.message.register(self._cmd_set2, Command("setwallet2"))
+        self.router.message.register(self._cmd_set_thai, Command("setwalletthai", "setwallett"))
