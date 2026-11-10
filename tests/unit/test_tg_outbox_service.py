@@ -89,6 +89,30 @@ async def test_exchange_completion_only_edits_cards(source: str) -> None:
     assert "Проведена" in (client_card.text or "")
 
 
+@pytest.mark.parametrize("source", ["tg_bot", "crm"])
+@pytest.mark.parametrize("status", ["new", "done"])
+@pytest.mark.parametrize("stored,display", [
+    ("86.65000000", "86.65"),
+    ("70.00000000", "70"),
+    ("100.00000000", "100"),
+    ("86.87491955", "86.87491955"),
+])
+async def test_exchange_status_card_formats_stored_rate_without_changing_amounts(source, status, stored, display):
+    messenger = FakeMessenger()
+    repository = FakeDeliveryRepository()
+    repository.source = source
+    repository.rate = stored
+    service = DealTelegramSyncService(repository=repository, messenger=messenger)
+
+    await service.deliver(_item(status=status))
+
+    card = next(edit for edit in messenger.edits if edit.chat_id == -100500)
+    assert f"<b>Курс</b>: <code>{display}</code>" in card.text
+    assert "<code>100.00 usdt</code>" in card.text
+    assert "<code>9’550.00 rub</code>" in card.text
+    assert repository.rate == stored
+
+
 @pytest.mark.asyncio
 async def test_delayed_older_status_cannot_replace_completed_notification() -> None:
     messenger = FakeMessenger()
@@ -234,6 +258,7 @@ class FakeDeliveryRepository:
     archived_message_id: int | None = None
     current_status: str | None = None
     source: str = "tg_bot"
+    rate: str = "95.5"
 
     async def find_archived_deal_status_message(
         self, chat_id: int, request_id: str
@@ -271,7 +296,7 @@ class FakeDeliveryRepository:
                 "recv_amount": "100.00",
                 "pay_code": "RUB",
                 "pay_amount": "9550.00",
-                "rate": "95.5",
+                "rate": self.rate,
             },
         }
 

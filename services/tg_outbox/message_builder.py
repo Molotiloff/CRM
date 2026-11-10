@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 from services.exchange.text_builder import ExchangeTextBuilder
+from services.number_formatting import format_rate
 
 _STATUS_LINE_RE = re.compile(r"^<b>Статус(?: CRM)?</b>:.*$", re.MULTILINE)
 
@@ -96,7 +97,7 @@ class TelegramDealMessageBuilder:
                 pay_code=str(body["pay_code"]),
                 pay_amount=pay_amount,
                 pay_prec=_precision(pay_amount),
-                rate=str(body["rate"]),
+                rate=format_rate(Decimal(str(body["rate"]))),
                 note=str(body.get("note") or "").strip() or None,
             )
         except (KeyError, ValueError):
