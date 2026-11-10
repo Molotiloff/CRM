@@ -6,10 +6,11 @@ from typing import Any
 
 from aiogram import BaseMiddleware, Bot
 from aiogram.client.session.middlewares.base import NextRequestMiddlewareType
-from aiogram.methods import TelegramMethod
-from aiogram.types import Message
+from aiogram.methods import SendMediaGroup, TelegramMethod
+from aiogram.types import InputMediaPhoto, Message
 
 from services.message_archive.archive_service import MessageArchiveService
+from telegram_adapters.memory_document import EphemeralBufferedInputFile
 from telegram_adapters.message_archive import AiogramMessageArchiveNormalizer
 
 log = logging.getLogger("message_archive.middleware")
@@ -55,11 +56,20 @@ class OutgoingMessageArchiveMiddleware:
             messages.append(result)
         elif isinstance(result, list):
             messages.extend(item for item in result if isinstance(item, Message))
+        # Album pages after the first intentionally have no caption. Identify
+        # generated AML albums by their uploads, not by each returned caption.
+        telegram_only_album = isinstance(method, SendMediaGroup) and bool(method.media) and all(
+            isinstance(item, InputMediaPhoto)
+            and isinstance(item.media, EphemeralBufferedInputFile)
+            and str(item.media.filename or "").startswith("SKYEX_AML_")
+            for item in method.media
+        )
         for message in messages:
             try:
-                await self.service.archive(
-                    AiogramMessageArchiveNormalizer.normalize(message, outbound=True)
+                archived = AiogramMessageArchiveNormalizer.normalize(
+                    message, outbound=True, telegram_only_photos=telegram_only_album,
                 )
+                await self.service.archive(archived)
             except Exception:
                 log.exception(
                     "Failed to archive outgoing message method=%s chat_id=%s message_id=%s",

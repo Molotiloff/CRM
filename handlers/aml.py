@@ -15,6 +15,8 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputMediaPhoto,
+    MediaUnion,
     Message,
 )
 
@@ -206,27 +208,47 @@ class AMLHandler:
             caption_parts = split_telegram_text(report, limit=1024)
             try:
                 page_index = 0
-                while True:
-                    image_data, page_count = await self._pdf_executor.run(
-                        render_report_page, pdf_data, page_index,
-                    )
-                    photo = EphemeralBufferedInputFile(
-                        image_data, filename=f"SKYEX_AML_{page_index + 1}.png",
-                    )
+                page_count = 1
+                while page_index < page_count:
+                    photos: list[EphemeralBufferedInputFile] = []
+                    media: list[MediaUnion] = []
                     try:
-                        await bot.send_photo(
-                            chat_id=chat_id, photo=photo,
-                            caption=caption_parts[0] if page_index == 0 else f"SKYEX · Отчёт AML-проверки · Страница {page_index + 1}/{page_count}",
-                            caption_entities=getblock_link_entities(caption_parts[0], report_url) if page_index == 0 and len(caption_parts) == 1 else None,
-                            parse_mode=None,
-                        )
+                        batch_end = page_index + 1
+                        while page_index < batch_end:
+                            image_data, page_count = await self._pdf_executor.run(
+                                render_report_page, pdf_data, page_index,
+                            )
+                            photo = EphemeralBufferedInputFile(
+                                image_data, filename=f"SKYEX_AML_{page_index + 1}.png",
+                            )
+                            photos.append(photo)
+                            image_data = b""
+                            if not media:
+                                remaining_pages = page_count - page_index
+                                # Telegram albums hold 2..10 photos. Avoid a lone
+                                # last page when splitting reports longer than 10.
+                                batch_end = page_index + (9 if remaining_pages == 11 else min(10, remaining_pages))
+                            media.append(InputMediaPhoto(
+                                media=photo,
+                                caption=caption_parts[0] if page_index == 0 else None,
+                                caption_entities=getblock_link_entities(caption_parts[0], report_url) if page_index == 0 and len(caption_parts) == 1 else None,
+                                parse_mode=None,
+                            ))
+                            page_index += 1
+                        if page_count == 1:
+                            await bot.send_photo(
+                                chat_id=chat_id, photo=photos[0],
+                                caption=media[0].caption, caption_entities=media[0].caption_entities,
+                                parse_mode=None,
+                            )
+                        else:
+                            await bot.send_media_group(chat_id=chat_id, media=media)
                         image_sent = True
                     finally:
-                        photo.release()
-                        image_data = b""
-                    page_index += 1
-                    if page_index >= page_count:
-                        break
+                        for photo in photos:
+                            photo.release()
+                        photos.clear()
+                        media.clear()
             finally:
                 pdf_data = b""
             # Telegram captions are limited to 1024 UTF-16 units. Never truncate sources.

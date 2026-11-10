@@ -26,6 +26,7 @@ def setup(*, manager=False, wallet=7, chat_type="group"):
     bot.send_message = AsyncMock()
     bot.send_document = AsyncMock()
     bot.send_photo = AsyncMock()
+    bot.send_media_group = AsyncMock()
     bot.delete_message = AsyncMock()
     wait = SimpleNamespace(message_id=50, edit_text=AsyncMock())
     message = Mock(spec=Message)
@@ -297,14 +298,121 @@ async def test_all_preview_pages_upload_before_single_billing():
     await handler._confirm(callback(handler, message))
     photos = []
 
-    async def photo(**kwargs):
+    async def album(**kwargs):
         billing.charge.assert_not_awaited()
-        photos.append(kwargs["photo"])
+        photos.extend(item.media for item in kwargs["media"])
 
-    bot.send_photo.side_effect = photo
+    bot.send_media_group.side_effect = album
     with patch("handlers.aml.render_report_page", return_value=(b"png", 3)) as render:
         await queue.enqueue.call_args.args[0].on_success({"report_data": {}})
     assert [call.args[1] for call in render.call_args_list] == [0, 1, 2]
-    assert bot.send_photo.await_count == 3
+    bot.send_photo.assert_not_awaited()
+    bot.send_media_group.assert_awaited_once()
     assert all(photo.data == b"" for photo in photos)
     billing.charge.assert_awaited_once()
+
+
+@pytest.mark.parametrize("pages,sizes", [(2, [2]), (10, [10]), (11, [9, 2]), (21, [10, 9, 2])])
+async def test_report_albums_keep_page_order_caption_and_link(pages, sizes):
+    from unittest.mock import patch
+
+    handler, message, _, queue, bot = setup(manager=True)
+    await handler._cmd_aml(message)
+    batches = []
+    captions = []
+    files = []
+    url = "https://getblock.net/en/report-preview/album"
+
+    async def album(**kwargs):
+        batch = kwargs["media"]
+        batches.append([item.media.filename for item in batch])
+        captions.extend((item.caption, item.caption_entities, item.parse_mode) for item in batch)
+        files.extend(item.media for item in batch)
+        assert all(item.media.data == b"png" for item in batch)
+
+    bot.send_media_group.side_effect = album
+    with patch("handlers.aml.render_report_page", return_value=(b"png", pages)):
+        await queue.enqueue.call_args.args[0].on_success({"report_data": {
+            "trusted_sources": ["Exchange Licensed 90%"], "preview_link": url,
+        }})
+    assert [len(batch) for batch in batches] == sizes
+    assert [name for batch in batches for name in batch] == [f"SKYEX_AML_{i + 1}.png" for i in range(pages)]
+    assert "Exchange Licensed 90%" in captions[0][0]
+    assert captions[0][0].endswith("Отчет")
+    assert captions[0][1][0].url == url
+    assert all(caption is None for caption, _, _ in captions[1:])
+    assert all(mode is None for _, _, mode in captions)
+    assert all(file.data == b"" for file in files)
+    bot.send_photo.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_album_upload_failure_releases_every_image_and_does_not_charge(cancelled):
+    from unittest.mock import patch
+
+    handler, message, billing, queue, bot = setup()
+    await handler._cmd_aml(message)
+    await handler._confirm(callback(handler, message))
+    files = []
+
+    async def fail(**kwargs):
+        files.extend(item.media for item in kwargs["media"])
+        raise asyncio.CancelledError() if cancelled else RuntimeError("album upload failed")
+
+    bot.send_media_group.side_effect = fail
+    with patch("handlers.aml.render_report_page", return_value=(b"png", 3)):
+        with pytest.raises(asyncio.CancelledError if cancelled else RuntimeError):
+            await queue.enqueue.call_args.args[0].on_success({"report_data": {}})
+    assert len(files) == 3
+    assert all(file.data == b"" for file in files)
+    billing.charge.assert_not_awaited()
+
+
+async def test_album_render_failure_releases_already_rendered_pages():
+    from unittest.mock import patch
+
+    from telegram_adapters.memory_document import EphemeralBufferedInputFile
+
+    handler, message, billing, queue, bot = setup(manager=True)
+    await handler._cmd_aml(message)
+    files = []
+
+    def capture(*args, **kwargs):
+        file = EphemeralBufferedInputFile(*args, **kwargs)
+        files.append(file)
+        return file
+
+    with patch("handlers.aml.EphemeralBufferedInputFile", side_effect=capture), patch(
+        "handlers.aml.render_report_page", side_effect=[(b"png", 3), RuntimeError("render failed")],
+    ):
+        with pytest.raises(RuntimeError, match="render failed"):
+            await queue.enqueue.call_args.args[0].on_success({"report_data": {}})
+    assert len(files) == 1
+    assert files[0].data == b""
+    bot.send_media_group.assert_not_awaited()
+    billing.charge.assert_not_awaited()
+
+
+async def test_album_caption_overflow_preserves_every_source_and_report_link():
+    from unittest.mock import patch
+
+    handler, message, _, queue, bot = setup(manager=True)
+    await handler._cmd_aml(message)
+    captions = []
+
+    async def album(**kwargs):
+        captions.extend(item.caption for item in kwargs["media"] if item.caption)
+
+    bot.send_media_group.side_effect = album
+    sources = [f"Source{i:03} 🟡 0.01%" for i in range(100)]
+    url = "https://getblock.net/en/report-preview/long-album"
+    with patch("handlers.aml.render_report_page", return_value=(b"png", 2)):
+        await queue.enqueue.call_args.args[0].on_success({"report_data": {
+            "trusted_sources": sources, "preview_link": url,
+        }})
+    assert len(captions) == 1
+    assert len(captions[0].encode("utf-16-le")) // 2 <= 1024
+    combined = "".join(captions + [call.args[1] for call in bot.send_message.call_args_list])
+    assert all(source in combined for source in sources)
+    assert bot.send_message.call_args.kwargs["entities"][0].url == url

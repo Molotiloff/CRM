@@ -147,16 +147,19 @@ class _ReportPage:
         self.box(35, 163, _CONTENT, 92)
         self.text(52, 188, "ОБЩИЙ УРОВЕНЬ РИСКА", 8, _MUTED, bold=True)
         self.text(52, 227, raw or "Нет данных", 27, bold=True)
-        self.box(282, 193, 111, 29, "#332C25" if color == _AMBER else _BG, 9)
-        self.text(292, 211, label, 8.2, color, bold=True)
+        self.box(282, 194.5, 111, 29, "#332C25" if color == _AMBER else _BG, 9)
+        self.text(292, 212.5, label, 8.2, color, bold=True)
+        # Center the whole scale/provider group in the 163..255 pt risk card,
+        # not just the scale (which used to push its labels against the bottom).
+        scale_top = 185
         for index, segment in enumerate((_GREEN, _AMBER, _RED)):
-            self.box(408 + index * 44, 206, 44, 9, segment, 3)
+            self.box(408 + index * 44, scale_top, 44, 9, segment, 3)
         if value is not None:
             self.c.setFillColor(HexColor(_WHITE))
-            self.c.circle(408 + 132 * value / 100, _HEIGHT - 210.5, 4.8, stroke=0, fill=1)
+            self.c.circle(408 + 132 * value / 100, _HEIGHT - (scale_top + 4.5), 4.8, stroke=0, fill=1)
         provider = str(self.report.get("aml_provider") or "Не указан")
-        self.text(407, 234, f"Оценка: {provider}", 7.5, _MUTED)
-        self.text(407, 247, "Источник: GetBlock", 7.5, _MUTED)
+        self.text(407, 214, f"Оценка: {provider}", 7.5, _MUTED)
+        self.text(407, 227, "Источник: GetBlock", 7.5, _MUTED)
 
     def details(self) -> float:
         self.text(38, 276, "СВЕДЕНИЯ О ПРОВЕРКЕ", 9, _BLUE, bold=True)
@@ -204,7 +207,9 @@ class _ReportPage:
                 lines = _wrap(label, width - 62, 7.1)
                 tail_lines = _wrap(tail, width - 22, 6.5) if tail else []
                 row_height = max(20, len(lines) * 10 + len(tail_lines) * 9 + 7)
-                if y + (len(lines) - 1) * 10 + len(tail_lines) * 9 + 4 > 652:
+                # The card ends at 660 pt. Keep a compact 3 pt bottom inset
+                # plus 4 pt for descenders; do not spill a readable last row.
+                if y + (len(lines) - 1) * 10 + len(tail_lines) * 9 + 4 > 657:
                     break
                 for line_index, line in enumerate(lines):
                     self.text(x + 11, y + line_index * 10, line, 7.1, _MUTED)

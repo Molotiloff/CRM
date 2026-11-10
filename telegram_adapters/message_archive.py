@@ -11,8 +11,10 @@ from services.message_archive.normalizer import MessageArchiveNormalizer
 
 class AiogramMessageArchiveNormalizer:
     @staticmethod
-    def normalize(message: Message, *, outbound: bool) -> ArchiveMessage:
-        return MessageArchiveNormalizer.from_bot_message(message, outbound=outbound)
+    def normalize(message: Message, *, outbound: bool, telegram_only_photos: bool = False) -> ArchiveMessage:
+        return MessageArchiveNormalizer.from_bot_message(
+            message, outbound=outbound, telegram_only_photos=telegram_only_photos,
+        )
 
 
 class AiogramArchiveMediaSource:

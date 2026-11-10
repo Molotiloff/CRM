@@ -4,9 +4,10 @@
 A4 vector PDF by `AMLReportPDFBuilder`, off the event loop via the shared
 `SerializedThreadExecutor` implementation. Long source lists continue on further
 pages; TRC20 wallet balances and TRC20 transaction hashes are included when present.
-Telegram receives only PNG report pages, not the intermediate PDF. The first photo
+Telegram receives only PNG report pages, not the intermediate PDF. Multipage
+reports are sent as albums of 2-10 photos, in page order. The first photo
 caption includes the full source breakdown and the checked wallet's USDT balance,
-without a GetBlock URL or PDF notice. Statistics exceeding the caption limit
+with a clickable "Отчет" link to GetBlock and without a PDF notice. Statistics exceeding the caption limit
 continue losslessly in plain-text messages. The same Tronscan balance
 is passed to the PDF's "Остаток USDT" field, including a zero balance. If Tronscan
 is unavailable, both formats say so rather than inventing a zero balance.
@@ -29,7 +30,8 @@ persistent image store; the message archive stores generated photo metadata/file
 IDs only (`download_status=skipped`) and does not download the images.
 
 Intermediate PDF pages are rendered with PDFium and sent as Telegram photos.
-Only one PNG is generated/uploaded at a time; PDFium document, page, bitmap, PIL
+At most one album (10 PNGs) is buffered at a time; each completed album is released
+before the next is rendered. PDFium document, page, bitmap, PIL
 image and BytesIO are explicitly closed before returning the PNG bytes. A global
 lock serializes native PDFium operations across all executor instances. On upload
 success/error/cancellation, the ephemeral upload releases its bytes and streams.

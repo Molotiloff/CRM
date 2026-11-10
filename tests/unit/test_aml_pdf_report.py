@@ -48,6 +48,22 @@ def test_a4_template_contains_real_report_and_clickable_links():
     assert "https://sky-ex.ru" in links
 
 
+def test_eight_dangerous_sources_and_wallet_balance_fit_on_first_page():
+    sources = ["Enforcement Action 1.62%", "Exchange Sanctioned Eu 0.6%", "Gambling 0.22%",
+               "Sanctions 0.08%", "Exchange Sanctioned Gb 0.05%", "Illegal Service 0.04%",
+               "Stolen Coins 0.02%", "Scam 0.01%"]
+    data = AMLReportPDFBuilder().build(
+        report(dangerous_sources=sources), request=AMLCheckRequest("wallet"),
+        wallet_balance="18175.008100 USDT",
+    )
+    reader = read_pdf(data)
+    assert len(reader.pages) == 1
+    text = reader.pages[0].extract_text()
+    assert "18175.008100 USDT" in text
+    for source in sources:
+        assert source in text.replace("\n", " ")
+
+
 @pytest.mark.parametrize(("percent", "label"), [("0%", "НИЗКИЙ РИСК"), ("31%", "СРЕДНИЙ РИСК"), ("70%", "ВЫСОКИЙ РИСК"), ("100%", "ВЫСОКИЙ РИСК"), ("", "НЕТ ОЦЕНКИ")])
 def test_risk_categories_and_missing_risk(percent, label):
     data = AMLReportPDFBuilder().build(report(risk_percent=percent), request=AMLCheckRequest("wallet"))

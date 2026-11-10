@@ -114,7 +114,7 @@ class MessageArchiveNormalizer:
     }
 
     @classmethod
-    def from_bot_message(cls, message: Any, *, outbound: bool) -> ArchiveMessage:
+    def from_bot_message(cls, message: Any, *, outbound: bool, telegram_only_photos: bool = False) -> ArchiveMessage:
         chat_title = (
             message.chat.title
             or message.chat.full_name
@@ -149,7 +149,7 @@ class MessageArchiveNormalizer:
         text = message.text if message.text is not None else message.caption
         raw_entities = message.entities if message.text is not None else message.caption_entities
         entities = [item.model_dump(mode="json", exclude_none=True) for item in raw_entities or []]
-        attachments = cls._bot_attachments(message, outbound=outbound)
+        attachments = cls._bot_attachments(message, outbound=outbound, telegram_only_photos=telegram_only_photos)
         message_type = str(_as_value(message.content_type))
         raw_payload = message.model_dump(
             mode="json",
@@ -231,12 +231,12 @@ class MessageArchiveNormalizer:
         return legacy_result or None
 
     @classmethod
-    def _bot_attachments(cls, message: Any, *, outbound: bool = False) -> tuple[ArchiveAttachment, ...]:
+    def _bot_attachments(cls, message: Any, *, outbound: bool = False, telegram_only_photos: bool = False) -> tuple[ArchiveAttachment, ...]:
         result: list[ArchiveAttachment] = []
         if message.photo:
-            telegram_only_report = outbound and str(getattr(message, "caption", "") or "").startswith((
+            telegram_only_report = outbound and (telegram_only_photos or str(getattr(message, "caption", "") or "").startswith((
                 "SKYEX · Отчёт AML-проверки · Страница ", "SKYEX · Отчёт AML-проверки\n",
-            ))
+            )))
             photo = message.photo[-1]
             result.append(
                 ArchiveAttachment(
