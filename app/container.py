@@ -51,6 +51,7 @@ from db_asyncpg.repositories.cash_chat_registry import CashChatRegistryRepo
 from db_asyncpg.repositories.client_transfers import ClientTransferRepository
 from db_asyncpg.repositories.deal_workflow import DealWorkflowRepository
 from db_asyncpg.repositories.deals import DealRepository
+from db_asyncpg.repositories.deliveries import DeliveryRepository
 from db_asyncpg.repositories.invoices import InvoiceRepository
 from db_asyncpg.repositories.message_archive import MessageArchiveRepo
 from db_asyncpg.repositories.shadow_comparisons import ShadowComparisonsRepo
@@ -90,6 +91,7 @@ from services.crm.deal_service import DealService
 from services.crm.deal_source_adapter import DealSourceAdapterRegistry
 from services.crm.deal_source_mutation import DealSourceMutationService
 from services.crm.deal_status_policy import DealStatusPolicy
+from services.crm.delivery_service import DeliveryService
 from services.crm.exchange_deal_source_adapter import ExchangeDealSourceAdapter
 from services.crm.fulfillment_deal_source_adapter import FulfillmentDealSourceAdapter
 from services.crm.invoice_service import InvoiceService
@@ -175,6 +177,7 @@ class CrmRepositories:
 
 @dataclass(frozen=True, slots=True)
 class CrmServices:
+    deliveries: DeliveryService
     invoices: InvoiceService
     event_bus: DealEventBus
     deals: DealService
@@ -452,6 +455,7 @@ class ApplicationContainer:
             operational_repositories=operational,
             crm_repositories=crm_repositories,
             crm=CrmServices(
+                deliveries=DeliveryService(DeliveryRepository(pool), event_bus),
                 invoices=InvoiceService(InvoiceRepository(pool, request_chat_id=config.request_chat_id), event_bus),
                 event_bus=event_bus,
                 deals=deal_service,

@@ -291,6 +291,8 @@ class DealService:
     @logged_operation("deal.create")
     @measured_operation("deal.create")
     async def create_deal(self, command: DealCreateCommand) -> Deal:
+        if command.deal_type is DealType.DELIVERY:
+            raise DealValidationError("Используйте операцию создания доставки")
         if command.deal_type is DealType.INVOICE:
             raise DealValidationError("Используйте операцию создания инвойса")
         if command.deal_type is DealType.CLIENT_TRANSFER:
@@ -332,6 +334,8 @@ class DealService:
     @measured_operation("deal.update")
     async def update_deal(self, deal_id: int, command: DealUpdateCommand) -> Deal:
         bind_log_context(deal_id=deal_id)
+        if (await self.get_deal(deal_id)).deal_type is DealType.DELIVERY:
+            raise DealValidationError("Для изменения доставки отмените новую заявку и создайте другую")
         if (await self.get_deal(deal_id)).deal_type is DealType.INVOICE:
             raise DealValidationError("Для изменения инвойса отмените новую заявку и создайте другую")
         if (await self.get_deal(deal_id)).deal_type is DealType.CLIENT_TRANSFER:
@@ -352,6 +356,8 @@ class DealService:
         command: DealStatusCommand,
     ) -> Deal:
         bind_log_context(deal_id=deal_id)
+        if (await self.get_deal(deal_id)).deal_type is DealType.DELIVERY:
+            raise DealValidationError("Используйте управление доставкой")
         if (await self.get_deal(deal_id)).deal_type is DealType.INVOICE:
             raise DealValidationError("Используйте проведение или отмену инвойса")
         status_command = command

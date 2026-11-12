@@ -208,6 +208,8 @@ def _deal_amount_rub(
 
 
 def _deal_direction(deal_type: str, body: Mapping[str, Any]) -> str:
+    if deal_type == "delivery":
+        return "Касса → клиент (доставка RUB)"
     if deal_type == "invoice":
         return "Партнёр → клиент (USDT)"
     if deal_type in {"sale", "purchase", "conversion"}:

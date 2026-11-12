@@ -26,6 +26,8 @@ from api.schemas.deals import (
     DealStatusRequest,
     DealType,
     DealUpdateRequest,
+    DeliveryCreateRequest,
+    DeliveryTransitionRequest,
     ExchangeDealCreateRequest,
     InvoiceCreateRequest,
     InvoicePostRequest,
@@ -54,6 +56,7 @@ from services.crm.deal_source_mutation import (
     DealSourceMutationService,
     ExchangeSourceEdit,
 )
+from services.crm.delivery_service import CreateDelivery
 from services.crm.invoice_service import CreateInvoice
 from services.crm.telegram_deal_registrar import exchange_type_from_firm_perspective
 from services.exchange.create_exchange_request import CreateExchangeParams
@@ -68,6 +71,23 @@ from services.request_table.table_done_service import RequestTableDoneService
 router = APIRouter(prefix="/api/v1", tags=["deals"])
 _exchange_creation_lock = asyncio.Lock()
 _cash_creation_lock = asyncio.Lock()
+
+
+@router.post("/deals/deliveries", response_model=DealDetailsResponse, status_code=201, responses=error_responses(400, 401, 403, 409))
+async def create_delivery(payload: DeliveryCreateRequest, request: Request, user: ApiUser = Depends(require_role(UserRole.manager))) -> DealDetailsResponse:
+    deal = await request.app.state.container.crm.deliveries.create(CreateDelivery(
+        client_id=payload.clientId, city=payload.city, amount=payload.amount, courier_tg_user_id=payload.courierTgUserId,
+        courier_client_id=payload.courierClientId, reward=payload.rewardRub, actor_user_id=user.id,
+        idempotency_key=payload.idempotencyKey, address=payload.address, comment=payload.comment,
+    ))
+    return build_deal_details(deal)
+
+
+@router.post("/deals/{deal_id}/delivery/status", response_model=DealDetailsResponse, responses=error_responses(400, 401, 403, 404, 409))
+async def transition_delivery(deal_id: int, payload: DeliveryTransitionRequest, request: Request, user: ApiUser = Depends(require_role(UserRole.manager))) -> DealDetailsResponse:
+    deal = await request.app.state.container.crm.deliveries.transition(deal_id, actor_user_id=user.id, status=payload.status,
+        expected_amount=payload.expectedAmount, expected_reward=payload.expectedRewardRub, expected_courier_client_id=payload.expectedCourierClientId)
+    return build_deal_details(deal)
 
 
 def get_deal_service(request: Request) -> DealService:
@@ -117,6 +137,7 @@ async def get_deal_form_context(
     return DealFormContextDto.model_validate({
         "cities": ["Екб", "Члб", "Тюмень", "Мск"],
         "counterparties": [],
+        "couriers": await request.app.state.container.crm.deliveries.couriers(),
         "clients": [
             {"id": str(row["id"]), "name": row["name"], "chatId": str(row["chat_id"])}
             for row in clients

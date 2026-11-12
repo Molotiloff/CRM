@@ -72,6 +72,25 @@ class InvoiceCreateRequest(BaseModel):
     comment: str | None = Field(default=None, max_length=4000)
 
 
+class DeliveryCreateRequest(BaseModel):
+    clientId: int = Field(gt=0)
+    city: str = Field(min_length=1, max_length=64)
+    amount: Decimal = Field(gt=0, lt=Decimal("1e18"), decimal_places=2)
+    courierTgUserId: int = Field(gt=0)
+    courierClientId: int = Field(gt=0)
+    rewardRub: Decimal = Field(ge=0, lt=Decimal("1e18"), decimal_places=2)
+    address: str = Field(default="", max_length=2000)
+    comment: str | None = Field(default=None, max_length=4000)
+    idempotencyKey: str = Field(min_length=1, max_length=120)
+
+
+class DeliveryTransitionRequest(BaseModel):
+    status: str
+    expectedAmount: Decimal = Field(gt=0, lt=Decimal("1e18"), decimal_places=2)
+    expectedRewardRub: Decimal = Field(ge=0, lt=Decimal("1e18"), decimal_places=2)
+    expectedCourierClientId: int = Field(gt=0)
+
+
 class InvoicePostRequest(BaseModel):
     expectedReceivedUsdt: Decimal = Field(gt=0, lt=Decimal("1e18"), decimal_places=8)
     expectedPaidUsdt: Decimal = Field(gt=0, lt=Decimal("1e18"), decimal_places=8)
@@ -143,6 +162,7 @@ class DealFormClientDto(BaseModel):
 
 
 class DealFormContextDto(BaseModel):
+    couriers: list[dict[str, str | None]] = Field(default_factory=list)
     cities: list[str]
     counterparties: list[dict[str, str]]
     clients: list[DealFormClientDto]
