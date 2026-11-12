@@ -15,6 +15,7 @@ from services.lifecycle import (
 )
 from services.payment_watch import PaymentWatchPoller
 from services.rate_order import AbcexWsService, OrderbookService, RapiraWsService, RateOrderService
+from services.rate_order.rapira_widget_service import RapiraWidgetService
 from services.tg_outbox import TgOutboxWorker
 
 log = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ class BotRuntimeServices:
     best_change_month_report_scheduler: AsyncLifecycle | None = None
     profit_capitalization_scheduler: AsyncLifecycle | None = None
     market_ws_service: RapiraWsService | None = None
+    rapira_widget_service: RapiraWidgetService | None = None
     orderbook_service: OrderbookService | None = None
     abcex_ws_service: AbcexWsService | None = None
     abcex_orderbook_service: OrderbookService | None = None
@@ -81,6 +83,7 @@ class BotRuntimeServices:
             ("Message archive", self.message_archive),
             ("Client invite-link backfill", self.client_invite_link_backfill),
             ("Rapira orderbook publisher", self.orderbook_service),
+            ("Rapira widget publisher", self.rapira_widget_service),
             ("ABCEX orderbook publisher", self.abcex_orderbook_service),
             ("Rapira websocket service", self.market_ws_service),
             ("ABCEX websocket service", self.abcex_ws_service),

@@ -9,6 +9,8 @@ from aiogram.types import Message
 
 from db_asyncpg.ports.administration import ManagerRepositoryPort
 from services.rate_order import OrderbookService
+from services.rate_order.rapira_widget_service import RapiraWidgetService
+from services.rate_order.widget_errors import WidgetDeliveryError
 from telegram_adapters.auth import manager_or_admin_message_required
 
 
@@ -21,6 +23,8 @@ class ExchangeMonitorHandler:
         command_prefix: str,
         admin_chat_ids: Iterable[int] | None = None,
         admin_user_ids: Iterable[int] | None = None,
+        widget_service: RapiraWidgetService | None = None,
+        widget_groups_enabled: bool = False,
     ) -> None:
         self.command_prefix = command_prefix
         self.repo = repo
@@ -28,6 +32,8 @@ class ExchangeMonitorHandler:
         self.admin_chat_ids = {int(x) for x in (admin_chat_ids or [])}
         self.admin_user_ids = {int(x) for x in (admin_user_ids or [])}
         self.router = Router()
+        self.widget_service = widget_service
+        self.widget_groups_enabled = widget_groups_enabled
         self._register()
 
     def _is_admin_chat(self, chat_id: int) -> bool:
@@ -54,6 +60,16 @@ class ExchangeMonitorHandler:
 
     @manager_or_admin_message_required
     async def _cmd_live(self, message: Message) -> None:
+        if self.widget_service is not None and (message.chat.type == "private" or self.widget_groups_enabled):
+            if message.chat.type != "private" and not self._is_admin_chat(message.chat.id):
+                await message.answer("Виджет доступен только менеджерам в личке или админском чате.")
+                return
+            try:
+                await self.widget_service.send(message.chat.id)
+            except (WidgetDeliveryError, RuntimeError) as exc:
+                text = "Telegram не принял виджет. Проверьте поддержку Bot API 10.4 и тип чата; в production доступны только личные сообщения." if isinstance(exc, WidgetDeliveryError) else str(exc)
+                await message.answer(text)
+            return
         if not self._is_admin_chat(message.chat.id):
             await message.answer(f"Команда /{self.command_prefix}ред доступна только в админском чате.")
             return

@@ -9,6 +9,7 @@ from app.runtime import BotRuntimeServices
 from db_asyncpg.repositories.aml_billing import AMLBillingRepository
 from db_asyncpg.repositories.client_closure import ClientClosureRepo
 from db_asyncpg.repositories.client_invite_links import ClientInviteLinkRepo
+from db_asyncpg.repositories.rapira_widgets import RapiraWidgetRepository
 from handlers import (
     AcceptShortHandler,
     ActHandler,
@@ -41,6 +42,7 @@ from middlewares.message_archive import (
     OutgoingMessageArchiveMiddleware,
 )
 from middlewares.silent_accounting_chats import SilentAccountingChatsMiddleware
+from middlewares.widget_query import WidgetQueryMiddleware
 from services.accounting import MidnightProfitCapitalizationJob, ProfitValuationService
 from services.admin_client import (
     ClientBootstrapService,
@@ -100,6 +102,7 @@ from services.rate_order import (
     RateOrderService,
 )
 from services.rate_order.market_quote_provider import RapiraMarketQuoteProvider
+from services.rate_order.rapira_widget_service import RapiraWidgetService
 from services.request_table.delete_interaction_service import RequestTableDeleteInteractionService
 from services.request_table.done_interaction_service import RequestTableDoneInteractionService
 from services.request_table.message_builder import RequestTableMessageBuilder
@@ -121,6 +124,7 @@ from telegram_adapters import (
 )
 from telegram_adapters.client_invite_links import AiogramClientInviteLinkGateway
 from telegram_adapters.message_archive import AiogramArchiveMediaSource
+from telegram_adapters.widget_api import WidgetApi
 
 
 def setup_handlers(
@@ -315,10 +319,18 @@ def setup_handlers(
 
     services.market_ws_service.on_orderbook_update = services.orderbook_service.request_refresh
 
+    services.rapira_widget_service = RapiraWidgetService(repository=RapiraWidgetRepository(container.pool),
+        gateway=WidgetApi(bot), orderbook=services.orderbook_service, allow_groups=config.rapira_widget_groups_enabled)
+    services.market_ws_service.on_kline = services.rapira_widget_service.on_kline
+    dp.update.outer_middleware(WidgetQueryMiddleware(services.rapira_widget_service, manager_repo,
+        admin_ids=admin_user_list or [], admin_chat_ids=admin_chat_list or []))
+
     rapira_monitor_handler = ExchangeMonitorHandler(
         manager_repo,
         orderbook_service=services.orderbook_service,
         command_prefix="рап",
+        widget_service=services.rapira_widget_service,
+        widget_groups_enabled=config.rapira_widget_groups_enabled,
         admin_chat_ids=admin_chat_list,
         admin_user_ids=admin_user_list,
     )

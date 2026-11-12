@@ -22,6 +22,12 @@ class BotApp:
     def __init__(self, config: Config) -> None:
         self.config = config
         self.bot = Bot(token=config.bot_token)
+        if config.telegram_test_environment:
+            from aiogram.client.telegram import TelegramAPIServer
+            self.bot.session.api = TelegramAPIServer(
+                base="https://api.telegram.org/bot{token}/test/{method}",
+                file="https://api.telegram.org/file/bot{token}/test/{path}",
+            )
         self.container: ApplicationContainer | None = None
 
         request_chat_id = self.config.request_chat_id
@@ -104,6 +110,7 @@ class BotApp:
                     self.config.api_port,
                 )
             allowed_updates = self.dp.resolve_used_update_types()
+            allowed_updates = sorted(set(allowed_updates) | {"widget_query"})
             if self.config.message_archive_enabled:
                 allowed_updates = sorted(
                     set(allowed_updates)

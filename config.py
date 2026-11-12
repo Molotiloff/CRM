@@ -389,3 +389,12 @@ class Config:
     def city_cash_chat_ids(self) -> frozenset[int]:
         """Compatibility membership view; the city map remains the source of truth."""
         return frozenset(self.city_cash_chat_map.values())
+
+    @property
+    def rapira_widget_groups_enabled(self) -> bool:
+        """Opt-in for an independently configured Telegram test Bot API server."""
+        return self.telegram_test_environment and _parse_bool(os.getenv("RAPIRA_WIDGET_GROUPS_ENABLED"), default=False)
+
+    @property
+    def telegram_test_environment(self) -> bool:
+        return _parse_bool(os.getenv("TELEGRAM_TEST_ENVIRONMENT"), default=False)

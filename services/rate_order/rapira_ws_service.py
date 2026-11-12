@@ -29,6 +29,7 @@ SUBSCRIBE_PAYLOAD = [
     "subscribe",
     [
         "spot@public.depth@USDT_RUB",
+        "spot@public.kline@USDT_RUB",
     ],
 ]
 
@@ -60,6 +61,7 @@ class RapiraWsService(ManagedTaskLifecycle):
         self.asks: list[dict] = []
         self.bids: list[dict] = []
         self.orderbook_observed_at: datetime | None = None
+        self.on_kline: Callable[[dict], None] | None = None
 
         self._ssl_context = ssl.create_default_context(cafile=certifi.where())
 
@@ -144,9 +146,10 @@ class RapiraWsService(ManagedTaskLifecycle):
             self.asks = normalized
         elif direction == "BUY":
             self.bids = normalized
-            self.orderbook_observed_at = datetime.now(UTC)
         else:
             return
+
+        self.orderbook_observed_at = datetime.now(UTC)
 
         prev_best_ask = self.best_ask
 
@@ -190,6 +193,11 @@ class RapiraWsService(ManagedTaskLifecycle):
 
         if event_name == "depth" and isinstance(payload, dict):
             await self._handle_depth_payload(payload)
+        elif event_name == "kline" and isinstance(payload, dict) and self.on_kline is not None:
+            try:
+                self.on_kline(payload)
+            except Exception:
+                log.exception("Rapira candle callback failed")
 
     async def _subscribe(self, ws) -> None:
         payload = "42" + json.dumps(SUBSCRIBE_PAYLOAD, ensure_ascii=False, separators=(",", ":"))
