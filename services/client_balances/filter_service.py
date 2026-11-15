@@ -68,16 +68,19 @@ class ClientBalancesFilterService:
         min_negative_balance: Decimal | None = None,
         min_positive_balance: Decimal | None = None,
         excluded_client_group: str | None = None,
+        excluded_client_groups: Iterable[str] = (),
     ) -> tuple[str, str, list[ClientBalanceRow]]:
         normalized_code = self.normalize_code(code_filter)
         normalized_sign = self.normalize_sign(sign_filter)
-        excluded_group_norm = (excluded_client_group or "").strip().casefold()
+        excluded_groups = {group.strip().casefold() for group in excluded_client_groups}
+        if excluded_client_group:
+            excluded_groups.add(excluded_client_group.strip().casefold())
 
         filtered: list[ClientBalanceRow] = []
         for row in rows:
             if row.currency_code != normalized_code:
                 continue
-            if excluded_group_norm and row.client_group.casefold() == excluded_group_norm:
+            if row.client_group.strip().casefold() in excluded_groups:
                 continue
 
             balance = row.balance

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from decimal import Decimal
 
 from services.client_balances.filter_service import ClientBalancesFilterService
@@ -27,6 +28,7 @@ class DailyBalancesReportService:
         min_negative_balance: Decimal | None = None,
         min_positive_balance: Decimal | None = None,
         excluded_client_group: str | None = None,
+        excluded_client_groups: Iterable[str] = (),
     ) -> list[str]:
         rows = await self.query_service.balances_by_client()
 
@@ -38,6 +40,7 @@ class DailyBalancesReportService:
                 min_negative_balance=min_negative_balance,
                 min_positive_balance=min_positive_balance,
                 excluded_client_group=excluded_client_group,
+                excluded_client_groups=excluded_client_groups,
             )
             return self.report_builder.build_signed_report(
                 code_filter=normalized_code,

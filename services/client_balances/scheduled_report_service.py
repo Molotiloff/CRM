@@ -10,6 +10,7 @@ from services.messaging import MessengerPort
 SCHEDULED_RUB_DEBT_THRESHOLD = Decimal("-1000")
 SCHEDULED_USDT_DEBT_THRESHOLD = Decimal("-1")
 EXCLUDED_SCHEDULED_GROUP = "Балансы"
+EXCLUDED_SCHEDULED_GROUPS = (EXCLUDED_SCHEDULED_GROUP, "internal_wallet")
 
 
 @dataclass(slots=True, frozen=True)
@@ -48,7 +49,7 @@ class ScheduledBalancesReportService:
                     code_filter=section.code,
                     sign_filter="-",
                     min_negative_balance=section.threshold,
-                    excluded_client_group=EXCLUDED_SCHEDULED_GROUP,
+                    excluded_client_groups=EXCLUDED_SCHEDULED_GROUPS,
                 )
                 if self._is_empty(chunks):
                     continue
