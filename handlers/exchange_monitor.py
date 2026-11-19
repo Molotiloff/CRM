@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from decimal import Decimal
 
@@ -12,6 +13,8 @@ from services.rate_order import OrderbookService
 from services.rate_order.rapira_widget_service import RapiraWidgetService
 from services.rate_order.widget_errors import WidgetDeliveryError
 from telegram_adapters.auth import manager_or_admin_message_required
+
+logger = logging.getLogger(__name__)
 
 
 class ExchangeMonitorHandler:
@@ -60,28 +63,44 @@ class ExchangeMonitorHandler:
 
     @manager_or_admin_message_required
     async def _cmd_live(self, message: Message) -> None:
-        if self.widget_service is not None and (message.chat.type == "private" or self.widget_groups_enabled):
+        if self.widget_service is not None and (
+            message.chat.type == "private" or self.widget_groups_enabled
+        ):
             if message.chat.type != "private" and not self._is_admin_chat(message.chat.id):
-                await message.answer("Виджет доступен только менеджерам в личке или админском чате.")
+                await message.answer(
+                    "Виджет доступен только менеджерам в личке или админском чате."
+                )
                 return
             try:
                 await self.widget_service.send(message.chat.id)
             except (WidgetDeliveryError, RuntimeError) as exc:
-                text = "Telegram не принял виджет. Проверьте поддержку Bot API 10.4 и тип чата; в production доступны только личные сообщения." if isinstance(exc, WidgetDeliveryError) else str(exc)
-                await message.answer(text)
+                logger.warning(
+                    "Widget unavailable; sending text orderbooks: chat_id=%s error_type=%s",
+                    message.chat.id,
+                    type(exc).__name__,
+                )
+                await self._send_text_orderbooks(message)
             return
         if not self._is_admin_chat(message.chat.id):
-            await message.answer(f"Команда /{self.command_prefix}ред доступна только в админском чате.")
+            await message.answer(
+                f"Команда /{self.command_prefix}ред доступна только в админском чате."
+            )
             return
 
+        await self._send_text_orderbooks(message)
+
+    async def _send_text_orderbooks(self, message: Message) -> None:
         text = self.orderbook_service.build_live_text(
             min_total_volume=Decimal("500000"),
         )
         sent = await message.answer(text)
-        await self.orderbook_service.set_live_message(
-            chat_id=sent.chat.id,
-            message_id=sent.message_id,
-        )
+        # The legacy publisher owns one live message. A private fallback must
+        # not replace the admin group's ongoing orderbook subscription.
+        if self._is_admin_chat(message.chat.id):
+            await self.orderbook_service.set_live_message(
+                chat_id=sent.chat.id,
+                message_id=sent.message_id,
+            )
 
     def _register(self) -> None:
         self.router.message.register(self._cmd_asks, Command(self.command_prefix))
