@@ -11,6 +11,12 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramRetryAfter,
+)
 from aiogram.types import Update
 
 from middlewares.widget_query import WidgetQueryMiddleware
@@ -20,9 +26,48 @@ from services.rate_order.rapira_widget_payload import HTML_PATH, widget_state
 from services.rate_order.rapira_widget_service import RapiraWidgetService
 from services.rate_order.widget_binding import WidgetBinding
 from services.rate_order.widget_errors import WidgetDeliveryError
-from telegram_adapters.widget_api import AnswerWidgetQuery, EditMessageWidgetData, SendWidget
+from telegram_adapters.widget_api import (
+    AnswerWidgetQuery,
+    EditMessageWidgetData,
+    SendWidget,
+    WidgetApi,
+)
 
 T = 1794475800 // 3600 * 3600
+
+
+@pytest.mark.parametrize("kind", ["bad_request", "forbidden", "retry", "unavailable"])
+async def test_widget_api_logs_original_error_without_request_payload(kind, caplog):
+    method = SendWidget(
+        chat_id=123, html="PRIVATE_HTML", chat_data="PRIVATE_STATE", caption="PRIVATE_CAPTION"
+    )
+    token = "123456:SECRET_TOKEN"
+    description = f"Bad Request: WIDGET_INVALID {token}\nsecond line"
+    errors = {
+        "bad_request": TelegramBadRequest(method=method, message=description),
+        "forbidden": TelegramForbiddenError(method=method, message=description),
+        "retry": TelegramRetryAfter(method=method, message=description, retry_after=20),
+        "unavailable": TelegramAPIError(method=method, message=description),
+    }
+    bot = AsyncMock(side_effect=errors[kind])
+    bot.token = token
+    with pytest.raises(WidgetDeliveryError) as caught:
+        await WidgetApi(bot)._call(method)
+    assert caught.value.kind == kind
+    assert "method=sendWidget chat_id=123" in caplog.text
+    assert "WIDGET_INVALID" in caplog.text
+    assert "[REDACTED]" in caplog.text
+    for secret in (token, "PRIVATE_HTML", "PRIVATE_STATE", "PRIVATE_CAPTION"):
+        assert secret not in caplog.text
+
+
+async def test_widget_api_does_not_warn_on_unchanged_message(caplog):
+    method = EditMessageWidgetData(chat_id=123, message_id=4, chat_data="same")
+    bot = AsyncMock(
+        side_effect=TelegramBadRequest(method=method, message="message is not modified")
+    )
+    assert await WidgetApi(bot)._call(method) is None
+    assert not caplog.records
 
 
 def row(t=T, volume="10"):

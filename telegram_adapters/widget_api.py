@@ -4,6 +4,7 @@ Use Bot.__call__: shared session, proxy, test API URL and archive middleware app
 No monkey patches and no second Telegram HTTP client.
 """
 
+import logging
 from typing import Any, ClassVar
 
 from aiogram import Bot
@@ -17,6 +18,8 @@ from aiogram.methods import TelegramMethod
 from aiogram.types import Message
 
 from services.rate_order.widget_errors import WidgetDeliveryError
+
+logger = logging.getLogger(__name__)
 
 
 class SendWidget(TelegramMethod[Message]):
@@ -50,19 +53,42 @@ class WidgetApi:
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
 
+    def _log_error(self, method: TelegramMethod[Any], exc: TelegramAPIError) -> None:
+        # Do not serialize the request/exception: it may contain HTML, market
+        # data or the bot URL. Only Telegram's description and routing IDs.
+        description = exc.message
+        token = getattr(self.bot, "token", None)
+        if isinstance(token, str) and token:
+            description = description.replace(token, "[REDACTED]")
+        description = description.replace("\r", " ").replace("\n", " ")[:2048]
+        logger.warning(
+            "Telegram widget API failed: method=%s chat_id=%s message_id=%s "
+            "error_type=%s retry_after=%s description=%s",
+            method.__api_method__,
+            getattr(method, "chat_id", None),
+            getattr(method, "message_id", None),
+            type(exc).__name__,
+            getattr(exc, "retry_after", None),
+            description,
+        )
+
     async def _call(self, method: TelegramMethod[Any]) -> Any:
         try:
             return await self.bot(method)
         except TelegramRetryAfter as exc:
+            self._log_error(method, exc)
             raise WidgetDeliveryError("retry", retry_after=exc.retry_after) from exc
         except TelegramForbiddenError as exc:
+            self._log_error(method, exc)
             raise WidgetDeliveryError("forbidden") from exc
         except TelegramBadRequest as exc:
             if "message is not modified" in str(exc).lower():
                 return None
+            self._log_error(method, exc)
             kind = "missing" if "message to edit not found" in str(exc).lower() else "bad_request"
             raise WidgetDeliveryError(kind) from exc
         except TelegramAPIError as exc:
+            self._log_error(method, exc)
             raise WidgetDeliveryError("unavailable") from exc
 
     async def send(self, *, chat_id: int, html: str, state: str, caption: str) -> int:
