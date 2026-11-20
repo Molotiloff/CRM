@@ -16,14 +16,21 @@ from db_asyncpg.pool import close_pool, create_pool
 from middlewares.dedup import DedupMiddleware
 from observability import configure_logging
 from telegram_adapters import AiogramMessenger
+from telegram_adapters.resilient_session import (
+    ResilientTelegramSession,
+    TelegramResponseRetryMiddleware,
+)
 
 
 class BotApp:
     def __init__(self, config: Config) -> None:
         self.config = config
-        self.bot = Bot(token=config.bot_token)
+        session = ResilientTelegramSession()
+        session.middleware(TelegramResponseRetryMiddleware())
+        self.bot = Bot(token=config.bot_token, session=session)
         if config.telegram_test_environment:
             from aiogram.client.telegram import TelegramAPIServer
+
             self.bot.session.api = TelegramAPIServer(
                 base="https://api.telegram.org/bot{token}/test/{method}",
                 file="https://api.telegram.org/file/bot{token}/test/{path}",
