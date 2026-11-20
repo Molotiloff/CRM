@@ -75,6 +75,17 @@ class CashRequestContextRepositoryPort(Protocol):
 
     async def get_cash_request_deal_status(self, *, req_id: str) -> str | None: ...
 
+    async def update_cash_request_deal(
+        self,
+        *,
+        req_id: str,
+        client_id: int,
+        city: str,
+        request_kind: str,
+        comment: str | None,
+        body_patch: dict[str, Any],
+    ) -> bool: ...
+
 
 class ExchangeCommandRepositoryPort(Protocol):
     async def ensure_client(

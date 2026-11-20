@@ -156,6 +156,44 @@ class EditCashRequest(CashRequestUseCaseBase):
                 schedule_line=schedule_line,
             )
 
+        # The settlement lookup uses deals.city/body, not Telegram card text.
+        # Guard the UPDATE too: settlement/cancellation can race with parsing.
+        # Legacy cards with no CRM deal keep their existing editing behaviour.
+        if deal_status is not None:
+            body_patch = {
+                "telegram_client_text": text_client,
+                "telegram_request_text": text_city,
+                "contact1": parsed.contact1,
+                "contact2": parsed.contact2,
+                "last_edited_by": params.editor_name,
+                "last_edited_at": audit.changed_ts,
+            }
+            if details.money is not None:
+                body_patch.update(
+                    currency=str(details.money.currency), amount=str(details.money.amount)
+                )
+            if details.receive is not None and details.pay is not None:
+                body_patch.update(
+                    in_code=str(details.receive.currency),
+                    in_amount=str(details.receive.amount),
+                    out_code=str(details.pay.currency),
+                    out_amount=str(details.pay.amount),
+                )
+            updated = await self.repo.update_cash_request_deal(
+                req_id=src.req_id,
+                client_id=ctx.client_id,
+                city=ctx.city,
+                request_kind=parsed.kind,
+                comment=parsed.comment or None,
+                body_patch=body_patch,
+            )
+            if not updated:
+                error = (
+                    f"Не удалось обновить заявку {src.req_id}: проверьте клиента и текущий статус."
+                )
+                await replier.reply(error)
+                return EditCashRequestResult(ok=False, req_id=src.req_id, error=error)
+
         try:
             await messenger.edit_text(
                 chat_id=params.chat_id,

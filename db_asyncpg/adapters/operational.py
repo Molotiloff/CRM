@@ -141,6 +141,25 @@ class ClientWalletScheduleContextAdapter:
     async def get_cash_request_deal_status(self, *, req_id: str) -> str | None:
         return await self._schedule.get_cash_request_deal_status(req_id=req_id)
 
+    async def update_cash_request_deal(
+        self,
+        *,
+        req_id: str,
+        client_id: int,
+        city: str,
+        request_kind: str,
+        comment: str | None,
+        body_patch: dict[str, Any],
+    ) -> bool:
+        return await self._schedule.update_cash_request_deal(
+            req_id=req_id,
+            client_id=client_id,
+            city=city,
+            request_kind=request_kind,
+            comment=comment,
+            body_patch=body_patch,
+        )
+
 
 class ActCounterLedgerRepositoryAdapter(ClientWalletTransactionRepositoryAdapter):
     def __init__(

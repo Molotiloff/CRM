@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+import html
+import json
+import re
+from decimal import Decimal
+from functools import partial
+
 import pytest
 
+from db_asyncpg.repositories.cash_settlements import CashSettlementRepo
 from db_asyncpg.repositories.deals import DealRepository
+from db_asyncpg.uow import AsyncpgUnitOfWork
+from services.accounting.cash_settlement_models import CashSettlementCommand
+from services.accounting.cash_settlement_service import CashSettlementService
 from services.cash_requests import (
     CreateCashRequest,
     CreateCashRequestParams,
@@ -179,10 +189,13 @@ class TestCreateCashCore:
 
         assert result.ok
         async with pool.acquire() as connection:
-            assert await connection.fetchval(
-                "SELECT client_group FROM clients WHERE id = $1",
-                client_id,
-            ) == "internal_wallet"
+            assert (
+                await connection.fetchval(
+                    "SELECT client_group FROM clients WHERE id = $1",
+                    client_id,
+                )
+                == "internal_wallet"
+            )
 
     async def test_missing_account_is_reported_without_messages(
         self, cash_request_repo, request_schedule_repo, client_id
@@ -203,6 +216,115 @@ class TestCreateCashCore:
 
 
 class TestEditCashCore:
+    @pytest.mark.parametrize("kind", ["dep", "wd"])
+    @pytest.mark.parametrize("separate_request_chat", [True, False])
+    async def test_city_edit_updates_deal_and_settles_only_in_new_city(
+        self,
+        pool,
+        repo,
+        cash_request_repo,
+        request_schedule_repo,
+        client_id,
+        kind,
+        separate_request_chat,
+    ) -> None:
+        router = RequestRouterService(
+            request_chat_id=REQUEST_CHAT,
+            city_cash_chats={
+                "члб": REQUEST_CHAT,
+                "екб": REQUEST_CHAT - 1 if separate_request_chat else REQUEST_CHAT,
+            },
+            default_city="екб",
+        )
+        schedule = RequestScheduleService(repo=request_schedule_repo, router_service=router)
+        creator = CreateCashRequest(
+            repo=cash_request_repo,
+            router_service=router,
+            schedule_service=schedule,
+            deal_registrar=TelegramDealRegistrar(
+                DealService(DealRepository(pool), DealEventBus()), default_city="екб"
+            ),
+        )
+        creation_replier = CollectingReplier()
+        created = await creator.execute_core(
+            _dep_params(parsed={"kind": kind, "city": "члб"}, source_message_id=904),
+            messenger=FakeMessenger(),
+            replier=creation_replier,
+        )
+        assert created.ok and created.req_id
+        params = EditCashRequestParams(
+            chat_id=CLIENT_CHAT,
+            chat_name="Тестовый чат",
+            parsed=_dep_params(parsed={"kind": kind, "city": "екб", "amount_expr": "2000"}).parsed,
+            old_text=html.unescape(re.sub(r"<[^>]+>", "", creation_replier.replies[0])),
+            reply_msg_id=701,
+            editor_name="Менеджер",
+        )
+        editor = EditCashRequest(
+            repo=cash_request_repo, router_service=router, schedule_service=schedule
+        )
+        assert (await editor.prepare_core(params, replier=CollectingReplier())).ok
+        async with pool.acquire() as con:
+            assert (
+                await con.fetchval(
+                    "SELECT city FROM deals WHERE body->>'req_id' = $1", created.req_id
+                )
+                == "члб"
+            )
+        edited = await editor.execute_core(
+            params, messenger=FakeMessenger(), replier=CollectingReplier()
+        )
+        assert edited.ok
+        async with pool.acquire() as con:
+            deal = await con.fetchrow(
+                "SELECT * FROM deals WHERE body->>'req_id' = $1", created.req_id
+            )
+            body = json.loads(deal["body"])
+            assert deal["city"] == "екб" and deal["status"] == "new"
+            assert Decimal(body["amount"]) == Decimal("2000") and body["currency"] == "RUB"
+            assert body["telegram_client_text"] == edited.client_text
+            assert body["telegram_request_text"] == edited.request_text
+        entry = await request_schedule_repo.get_request_schedule_entry_by_req_id(
+            req_id=created.req_id
+        )
+        assert entry["city"] == "екб"
+        for city, chat in (("члб", -90001), ("екб", -90002)):
+            cash_id = await repo.ensure_client(chat, f"Касса {city}")
+            await repo.add_currency(cash_id, "RUB", 2)
+            await repo.deposit(
+                client_id=cash_id, currency_code="RUB", amount=Decimal("5000"), source="test"
+            )
+            async with pool.acquire() as con:
+                await con.execute(
+                    "INSERT INTO cash_chat_registry(chat_id, client_id, city, location_name) VALUES ($1,$2,$3,$3)",
+                    chat,
+                    cash_id,
+                    city,
+                )
+        settlement_repo = CashSettlementRepo(pool)
+        assert (
+            await settlement_repo.get_context_for_update(
+                request_id=created.req_id, city_chat_id=-90001
+            )
+            is None
+        )
+        context = await settlement_repo.get_context_for_update(
+            request_id=created.req_id, city_chat_id=-90002
+        )
+        assert context is not None and context.expected_qty == Decimal("2000")
+        result = await CashSettlementService(partial(AsyncpgUnitOfWork, pool)).settle(
+            CashSettlementCommand(
+                request_id=created.req_id,
+                city_chat_id=-90002,
+                command_message_id=10,
+                currency="RUB",
+                signed_qty=Decimal("2000" if kind == "dep" else "-2000"),
+                actor_tg_user_id=77,
+                evidence={},
+            )
+        )
+        assert result.actual_qty == Decimal("2000")
+
     @pytest.mark.parametrize("status", ["done", "canceled"])
     async def test_terminal_cash_deal_cannot_be_edited_or_reactivated(
         self, pool, cash_request_repo, request_schedule_repo, client_id, status
@@ -221,6 +343,14 @@ class TestEditCashCore:
                 created.req_id,
             )
         await request_schedule_repo.deactivate_request_schedule_entry(created.req_id)
+        assert not await cash_request_repo.update_cash_request_deal(
+            req_id=created.req_id,
+            client_id=client_id,
+            city="члб",
+            request_kind="dep",
+            comment="must not change",
+            body_patch={"amount": "2000"},
+        )
 
         router, schedule = _router_and_schedule(request_schedule_repo)
         service = EditCashRequest(
@@ -233,8 +363,7 @@ class TestEditCashCore:
             chat_name="Тестовый чат",
             parsed=_dep_params(parsed={"amount_expr": "2000"}).parsed,
             old_text=(
-                f"Заявка на внесение: {created.req_id}\nГород: екб\n"
-                "Сумма: 1000 RUB\nКод: 111-222"
+                f"Заявка на внесение: {created.req_id}\nГород: екб\nСумма: 1000 RUB\nКод: 111-222"
             ),
             reply_msg_id=701,
             editor_name="Менеджер",

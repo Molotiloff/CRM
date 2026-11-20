@@ -1,11 +1,41 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from db_asyncpg.repositories.base import ConnectionBoundRepo
 
 
 class RequestScheduleRepo(ConnectionBoundRepo):
+    async def update_cash_request_deal(
+        self,
+        *,
+        req_id: str,
+        client_id: int,
+        city: str,
+        request_kind: str,
+        comment: str | None,
+        body_patch: dict[str, Any],
+    ) -> bool:
+        async with self._connection() as con:
+            row = await con.fetchrow(
+                """
+                UPDATE deals
+                SET city = $3, comment = $5, body = body || $6::jsonb, updated_at = NOW()
+                WHERE source_kind = 'cash' AND body->>'req_id' = $1
+                  AND client_id = $2 AND body->>'request_kind' = $4
+                  AND status NOT IN ('done', 'canceled')
+                RETURNING id
+                """,
+                req_id,
+                client_id,
+                city,
+                request_kind,
+                comment,
+                json.dumps(body_patch),
+            )
+            return row is not None
+
     async def get_cash_request_deal_status(self, *, req_id: str) -> str | None:
         async with self._connection() as con:
             return await con.fetchval(
