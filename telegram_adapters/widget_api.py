@@ -12,12 +12,14 @@ from aiogram.exceptions import (
     TelegramAPIError,
     TelegramBadRequest,
     TelegramForbiddenError,
+    TelegramNotFound,
     TelegramRetryAfter,
 )
 from aiogram.methods import TelegramMethod
 from aiogram.types import Message
 
 from services.rate_order.widget_errors import WidgetDeliveryError
+from telegram_adapters.live_message_errors import is_missing_edit_target
 
 logger = logging.getLogger(__name__)
 
@@ -81,11 +83,12 @@ class WidgetApi:
         except TelegramForbiddenError as exc:
             self._log_error(method, exc)
             raise WidgetDeliveryError("forbidden") from exc
-        except TelegramBadRequest as exc:
-            if "message is not modified" in str(exc).lower():
+        except (TelegramBadRequest, TelegramNotFound) as exc:
+            is_edit = method.__api_method__.startswith("editMessage")
+            if is_edit and "message is not modified" in exc.message.lower():
                 return None
             self._log_error(method, exc)
-            kind = "missing" if "message to edit not found" in str(exc).lower() else "bad_request"
+            kind = "missing" if is_edit and is_missing_edit_target(exc) else "bad_request"
             raise WidgetDeliveryError(kind) from exc
         except TelegramAPIError as exc:
             self._log_error(method, exc)

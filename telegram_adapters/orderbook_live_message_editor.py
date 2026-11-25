@@ -5,13 +5,16 @@ import logging
 from aiogram import Bot
 from aiogram.exceptions import (
     TelegramBadRequest,
+    TelegramForbiddenError,
     TelegramNetworkError,
+    TelegramNotFound,
     TelegramRetryAfter,
     TelegramServerError,
 )
 
 from services.rate_order.live_message_port import LiveMessageEditorPort
 from services.rate_order.models import LiveMessageEditResult, LiveMessageEditStatus
+from telegram_adapters.live_message_errors import is_missing_edit_target
 
 log = logging.getLogger("orderbook_service")
 
@@ -39,11 +42,13 @@ class AiogramOrderbookLiveMessageEditor(LiveMessageEditorPort):
                 LiveMessageEditStatus.RETRY,
                 retry_after_seconds=float(exc.retry_after),
             )
-        except TelegramBadRequest as exc:
+        except TelegramForbiddenError:
+            return LiveMessageEditResult(LiveMessageEditStatus.MISSING)
+        except (TelegramBadRequest, TelegramNotFound) as exc:
             error = str(exc).lower()
             if "message is not modified" in error:
                 return LiveMessageEditResult(LiveMessageEditStatus.UNCHANGED)
-            if "message to edit not found" in error or "chat not found" in error:
+            if is_missing_edit_target(exc):
                 return LiveMessageEditResult(LiveMessageEditStatus.MISSING)
             log.warning(
                 "Failed to refresh live message chat_id=%s message_id=%s: %r",

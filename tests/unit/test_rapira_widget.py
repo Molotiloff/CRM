@@ -15,6 +15,7 @@ from aiogram.exceptions import (
     TelegramAPIError,
     TelegramBadRequest,
     TelegramForbiddenError,
+    TelegramNotFound,
     TelegramRetryAfter,
 )
 from aiogram.types import Update
@@ -196,13 +197,25 @@ async def test_retry_after_blocks_next_publish_without_a_retry_loop():
     repo.remove.assert_not_awaited()
 
 
-async def test_deleted_widget_is_removed_without_affecting_other_messages():
+@pytest.mark.parametrize(
+    ("error_class", "description"),
+    [
+        (TelegramBadRequest, "Bad Request: message to edit not found"),
+        (TelegramBadRequest, "Bad Request: MESSAGE_ID_INVALID"),
+        (TelegramNotFound, "message not found"),
+    ],
+)
+async def test_deleted_widget_is_removed_without_affecting_other_messages(error_class, description):
     obj, repo, api = service()
     obj.bindings[42] = WidgetBinding(42, 100)
-    api.edit.side_effect = WidgetDeliveryError("missing")
+    method = EditMessageWidgetData(chat_id=42, message_id=100, chat_data="{}")
+    bot = AsyncMock(side_effect=error_class(method=method, message=description))
+    obj.api = WidgetApi(bot)
+    await obj.refresh()
     await obj.refresh()
     assert not obj.bindings
     repo.remove.assert_awaited_once_with(42)
+    bot.assert_awaited_once()
 
 
 async def test_long_caption_keeps_all_orderbook_text():
