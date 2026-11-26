@@ -8,6 +8,10 @@ class WidgetBinding:
     message_id: int
     frame: int = 15
     tails: list[int] = field(default_factory=list)
+    last_state: str | None = None
+    last_caption: str | None = None
+    last_tail_text: dict[int, str] = field(default_factory=dict)
+    blocked_until: float = 0.0
 
 
 class WidgetBindingPort(Protocol):

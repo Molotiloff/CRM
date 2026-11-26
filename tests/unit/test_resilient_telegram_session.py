@@ -239,3 +239,34 @@ async def test_retry_total_wait_budget(monkeypatch):
         await module.TelegramResponseRetryMiddleware()(send, SimpleNamespace(), method)
     assert send.await_count == 2
     assert sleep.await_count == 1
+
+
+async def test_long_chat_cooldown_survives_new_middleware_and_expires(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(module.time, "time", lambda: clock[0])
+    saved = {}
+
+    async def deadline(bot_id, chat_id):
+        return saved.get((bot_id, chat_id))
+
+    async def extend(bot_id, chat_id, until):
+        saved[bot_id, chat_id] = until
+
+    store = SimpleNamespace(deadline=deadline, extend=extend)
+    bot = SimpleNamespace(id=123)
+    method = SendMessage(chat_id=1, text="reply")
+    send = AsyncMock(
+        side_effect=TelegramRetryAfter(method=method, message="flood", retry_after=3600)
+    )
+    with pytest.raises(TelegramRetryAfter):
+        await module.TelegramResponseRetryMiddleware(store)(send, bot, method)
+    send.reset_mock(side_effect=True)
+    restarted = module.TelegramResponseRetryMiddleware(store)
+    with pytest.raises(TelegramRetryAfter, match="Stored Telegram chat cooldown"):
+        await restarted(send, bot, SendPhoto(chat_id=1, photo="file_id"))
+    send.assert_not_awaited()
+    await restarted(send, bot, SendMessage(chat_id=2, text="other chat"))
+    await restarted(send, bot, GetUpdates())
+    clock[0] = 4602
+    await restarted(send, bot, method)
+    assert send.await_count == 3

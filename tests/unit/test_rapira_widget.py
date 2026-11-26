@@ -158,7 +158,7 @@ def test_template_and_compact_payload_meet_real_telegram_limits():
     assert [(value + data["p"]) / 100 for value in last[1:5]] == [86.3, 86.4, 86.2, 86.35]
 
 
-async def test_widget_send_uses_real_html_and_persists_binding():
+async def test_private_widget_send_uses_real_html_without_persisting_binding():
     obj, repo, api = service()
     assert await obj.send(42) == 100
     args = api.send.call_args.kwargs
@@ -167,7 +167,10 @@ async def test_widget_send_uses_real_html_and_persists_binding():
     assert "Глубина стакана покупок" in args["caption"]
     assert len(args["caption"].encode("utf-16-le")) // 2 <= 1024
     assert obj.bindings[42].message_id == 100
-    repo.save.assert_awaited_once()
+    repo.save.assert_not_awaited()
+    await obj.refresh()
+    api.edit.assert_not_awaited()
+    api.caption.assert_not_awaited()
 
 
 async def test_query_authorization_identity_and_timeframe_are_checked():
@@ -182,17 +185,19 @@ async def test_query_authorization_identity_and_timeframe_are_checked():
     await obj.query(**base, data="tf:5")
     assert obj.bindings[42].frame == 5
     assert obj._wake.is_set()
-    repo.save.assert_awaited_once()
+    repo.save.assert_not_awaited()
+    assert obj._requested == {42}
 
 
 async def test_retry_after_blocks_next_publish_without_a_retry_loop():
     obj, repo, api = service()
     obj.bindings[42] = WidgetBinding(42, 100)
+    obj._requested.add(42)
     api.edit.side_effect = WidgetDeliveryError("retry", retry_after=60)
     await obj.refresh()
     await obj.refresh()
     api.edit.assert_awaited_once()
-    assert obj._blocked_until > time.monotonic()
+    assert obj.bindings[42].blocked_until > time.monotonic()
     assert 42 in obj.bindings
     repo.remove.assert_not_awaited()
 
@@ -208,6 +213,7 @@ async def test_retry_after_blocks_next_publish_without_a_retry_loop():
 async def test_deleted_widget_is_removed_without_affecting_other_messages(error_class, description):
     obj, repo, api = service()
     obj.bindings[42] = WidgetBinding(42, 100)
+    obj._requested.add(42)
     method = EditMessageWidgetData(chat_id=42, message_id=100, chat_data="{}")
     bot = AsyncMock(side_effect=error_class(method=method, message=description))
     obj.api = WidgetApi(bot)
@@ -216,6 +222,26 @@ async def test_deleted_widget_is_removed_without_affecting_other_messages(error_
     assert not obj.bindings
     repo.remove.assert_awaited_once_with(42)
     bot.assert_awaited_once()
+
+
+async def test_refresh_skips_unchanged_parts_and_updates_only_changed_state(monkeypatch):
+    obj, _, api = service()
+    monkeypatch.setattr(obj, "_caption", lambda: ("caption", ["tail"]))
+    await obj.send(42)
+    args = {"query_id": "q", "user_id": 42, "chat_id": 42, "message_id": 100, "authorized": True}
+    await obj.query(**args, data="refresh")
+    await obj.refresh()
+    api.edit.assert_not_awaited()
+    api.caption.assert_not_awaited()
+    api.text.assert_awaited_once()
+    obj._last_push = 0
+    await obj.query(**args, data="tf:5")
+    await obj.refresh()
+    state = api.edit.call_args.kwargs["state"]
+    assert json.loads(state)["f"] == 5
+    assert len(state.encode()) <= 1024
+    api.caption.assert_not_awaited()
+    api.text.assert_awaited_once()
 
 
 async def test_long_caption_keeps_all_orderbook_text():
@@ -273,6 +299,8 @@ async def test_publisher_closes_http_client_on_shutdown(monkeypatch):
     await obj.start()
     await ready.wait()
     await asyncio.sleep(0)
+    assert not obj.bindings
+    obj._history.assert_not_awaited()
     await obj.stop()
     assert client.is_closed
     assert not obj.bindings

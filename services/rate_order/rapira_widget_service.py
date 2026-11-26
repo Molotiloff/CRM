@@ -21,6 +21,7 @@ from .widget_binding import WidgetBinding, WidgetBindingPort
 from .widget_errors import WidgetDeliveryError
 
 log = logging.getLogger(__name__)
+REVISION_PLACEHOLDER = 9_999_999_999_999
 
 
 class WidgetGatewayPort(Protocol):
@@ -49,10 +50,10 @@ class RapiraWidgetService(ManagedTaskLifecycle):
         self.store = CandleStore()
         self.allow_groups = allow_groups
         self.bindings: dict[int, WidgetBinding] = {}
+        self._requested: set[int] = set()
         self._lock = asyncio.Lock()
         self._history_lock = asyncio.Lock()
         self._rest_due = 0.0
-        self._blocked_until = 0.0
         self._last_push = 0.0
         self._revision = time.time_ns() // 1_000_000
         self._client: httpx.AsyncClient | None = None
@@ -61,7 +62,7 @@ class RapiraWidgetService(ManagedTaskLifecycle):
     async def _run(self) -> None:
         restored = await self.repo.load(limit=self.LIMIT)
         self.bindings = {
-            item.chat_id: item for item in restored if item.chat_id > 0 or self.allow_groups
+            item.chat_id: item for item in restored if item.chat_id < 0 and self.allow_groups
         }
         async with httpx.AsyncClient(
             timeout=8,
@@ -83,9 +84,10 @@ class RapiraWidgetService(ManagedTaskLifecycle):
 
     async def _after_stop(self) -> None:
         self.bindings.clear()
+        self._requested.clear()
         self.store = CandleStore()
         self._wake.clear()
-        self._rest_due = self._blocked_until = self._last_push = 0.0
+        self._rest_due = self._last_push = 0.0
 
     def on_kline(self, payload: dict) -> None:
         try:
@@ -128,16 +130,20 @@ class RapiraWidgetService(ManagedTaskLifecycle):
                     log.warning("Rapira candle history unavailable for interval=%s", frame)
 
     def _state(self, frame: int) -> str:
-        self._revision += 1
         observed = getattr(self.orderbook.ws_service, "orderbook_observed_at", None)
         book_at = int(observed.timestamp()) if isinstance(observed, datetime) else 0
         return widget_state(
             self.store.window(frame),
             frame=frame,
-            revision=self._revision,
+            revision=REVISION_PLACEHOLDER,
             history_at=self.store.observed_at.get(frame, 0),
             book_at=book_at,
         )
+
+    def _versioned_state(self, state: str) -> str:
+        self._revision += 1
+        # The codec checks the 1024-byte limit; reserve the revision's digits.
+        return state.replace(f'"r":{REVISION_PLACEHOLDER},', f'"r":{self._revision},', 1)
 
     def _caption(self) -> tuple[str, list[str]]:
         book = self.orderbook.build_live_text().rsplit("\n\nАктуально на ", 1)[0]
@@ -165,6 +171,8 @@ class RapiraWidgetService(ManagedTaskLifecycle):
         for index in range(max(len(chunks), len(binding.tails))):
             old_id = binding.tails[index] if index < len(binding.tails) else None
             text = chunks[index] if index < len(chunks) else "Стаканы теперь в подписи к виджету."
+            if old_id is not None and binding.last_tail_text.get(index) == text:
+                continue
             try:
                 message_id = await self.api.text(
                     chat_id=binding.chat_id, message_id=old_id, text=text
@@ -176,10 +184,13 @@ class RapiraWidgetService(ManagedTaskLifecycle):
                     chat_id=binding.chat_id, message_id=None, text=text
                 )
                 binding.tails[index] = message_id
-                await self.repo.save(binding)
+                if binding.chat_id < 0:
+                    await self.repo.save(binding)
             if old_id is None:
                 binding.tails.append(message_id)
-                await self.repo.save(binding)
+                if binding.chat_id < 0:
+                    await self.repo.save(binding)
+            binding.last_tail_text[index] = text
 
     async def send(self, chat_id: int) -> int:
         if chat_id < 0 and not self.allow_groups:
@@ -189,12 +200,18 @@ class RapiraWidgetService(ManagedTaskLifecycle):
                 raise RuntimeError("Достигнут лимит активных виджетов")
             await self._history()
             caption, chunks = self._caption()
+            state = self._state(15)
             message_id = await self.api.send(
-                chat_id=chat_id, html=HTML_PATH.read_text(), state=self._state(15), caption=caption
+                chat_id=chat_id,
+                html=HTML_PATH.read_text(),
+                state=self._versioned_state(state),
+                caption=caption,
             )
-            binding = WidgetBinding(chat_id, message_id)
+            binding = WidgetBinding(chat_id, message_id, last_state=state, last_caption=caption)
             self.bindings[chat_id] = binding
-            await self.repo.save(binding)
+            self._requested.discard(chat_id)
+            if chat_id < 0:
+                await self.repo.save(binding)
             await self._texts(binding, chunks)
             return message_id
 
@@ -226,11 +243,14 @@ class RapiraWidgetService(ManagedTaskLifecycle):
             if self.bindings.get(chat_id) is not binding:
                 return
             binding.frame = frame or binding.frame
-            await self.repo.save(binding)
+            if chat_id < 0:
+                await self.repo.save(binding)
+            else:
+                self._requested.add(chat_id)
             self._wake.set()
 
     async def refresh(self) -> None:
-        if not self.bindings or time.monotonic() < self._blocked_until:
+        if not any(self._should_refresh(binding) for binding in self.bindings.values()):
             return
         await self._history()
         async with self._lock:
@@ -239,21 +259,29 @@ class RapiraWidgetService(ManagedTaskLifecycle):
                 await asyncio.sleep(delay)
             caption, chunks = self._caption()
             for binding in list(self.bindings.values()):
+                if not self._should_refresh(binding):
+                    continue
+                self._requested.discard(binding.chat_id)
                 try:
-                    await self.api.edit(
-                        chat_id=binding.chat_id,
-                        message_id=binding.message_id,
-                        state=self._state(binding.frame),
-                    )
-                    await self.api.caption(
-                        chat_id=binding.chat_id, message_id=binding.message_id, text=caption
-                    )
+                    state = self._state(binding.frame)
+                    if state != binding.last_state:
+                        await self.api.edit(
+                            chat_id=binding.chat_id,
+                            message_id=binding.message_id,
+                            state=self._versioned_state(state),
+                        )
+                        binding.last_state = state
+                    if caption != binding.last_caption:
+                        await self.api.caption(
+                            chat_id=binding.chat_id, message_id=binding.message_id, text=caption
+                        )
+                        binding.last_caption = caption
                     await self._texts(binding, chunks)
                     await asyncio.sleep(0.1)
                 except WidgetDeliveryError as exc:
                     if exc.kind == "retry":
-                        self._blocked_until = time.monotonic() + max(1, exc.retry_after)
-                        break
+                        binding.blocked_until = time.monotonic() + max(1, exc.retry_after)
+                        continue
                     if exc.kind in {"missing", "forbidden"}:
                         await self.repo.remove(binding.chat_id)
                         self.bindings.pop(binding.chat_id, None)
@@ -264,3 +292,8 @@ class RapiraWidgetService(ManagedTaskLifecycle):
                             type(exc).__name__,
                         )
             self._last_push = time.monotonic()
+
+    def _should_refresh(self, binding: WidgetBinding) -> bool:
+        return (
+            binding.chat_id < 0 or binding.chat_id in self._requested
+        ) and time.monotonic() >= binding.blocked_until

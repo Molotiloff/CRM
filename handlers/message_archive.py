@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
@@ -60,7 +61,8 @@ class MessageArchiveHandler:
     async def _authorized_message(self, message: Message) -> bool:
         if message.chat.id != self.admin_chat_id:
             if message.from_user and self._is_admin_private_chat(
-                chat_id=message.chat.id, chat_type=message.chat.type,
+                chat_id=message.chat.id,
+                chat_type=message.chat.type,
                 user_id=message.from_user.id,
             ):
                 return True
@@ -82,7 +84,8 @@ class MessageArchiveHandler:
             return False
         if callback.message.chat.id != self.admin_chat_id:
             if self._is_admin_private_chat(
-                chat_id=callback.message.chat.id, chat_type=callback.message.chat.type,
+                chat_id=callback.message.chat.id,
+                chat_type=callback.message.chat.type,
                 user_id=callback.from_user.id,
             ):
                 return True
@@ -104,7 +107,9 @@ class MessageArchiveHandler:
         parts = (message.text or "").split(maxsplit=1)
         query = parts[1].strip() if len(parts) > 1 else ""
         if not query:
-            await message.answer("Использование: /сообщение &lt;название чата&gt;", parse_mode="HTML")
+            await message.answer(
+                "Использование: /сообщение &lt;название чата&gt;", parse_mode="HTML"
+            )
             return
         user = message.from_user
         if user is None:
@@ -232,6 +237,20 @@ class MessageArchiveHandler:
                     export_id=export_id, status="cancelled", error="Application shutdown"
                 )
             raise
+        except TelegramRetryAfter as exc:
+            log.warning(
+                "Message archive export delivery rate-limited archive_chat_id=%s chat_id=%s retry_after=%s",
+                archive_chat_id,
+                requested_in_chat_id,
+                exc.retry_after,
+            )
+            if export_id is not None:
+                await self._safe_finish_export(
+                    export_id=export_id,
+                    status="failed",
+                    telegram_message_ids=sent_ids,
+                    error=f"TelegramRetryAfter: retry after {exc.retry_after} seconds",
+                )
         except Exception as exc:
             log.exception("Message archive export failed chat_id=%s", archive_chat_id)
             if export_id is not None:

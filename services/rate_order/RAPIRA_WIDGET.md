@@ -44,12 +44,14 @@ Decimal. OHLC display ticks are 0.01 RUB. A dynamically shortened packed candle
 window fits Telegram's 1024-byte state cap. HTML is checked against 32 KiB raw /
 4 KiB zlib level 9; external scripts, network and iframes are absent.
 
-One supervised publisher edits widget state and caption about every 10 seconds,
-with a minimum 5-second interval for user-triggered updates and RetryAfter
-backoff. Button queries are acknowledged before waiting for the publisher.
+One supervised publisher checks test group widgets about every 10 seconds.
+Private widgets update only on button requests and are not restored after
+restart. The publisher skips state, caption and overflow edits when their
+payload has not changed. Button queries are acknowledged before publishing.
+RetryAfter pauses the affected widget, not other chats.
 Missing/blocked messages are unsubscribed. Missing overflow messages are recreated.
-Bindings, interval and overflow IDs reuse `live_messages` under `rapira_widget_v1:`
-and restore on restart. No new database migration is required. Existing unrelated
+Test group bindings reuse `live_messages` under `rapira_widget_v1:` and restore
+on restart. No new database migration is required. Existing unrelated
 live orderbook messages are not overwritten. The owned HTTP client closes on
 shutdown/cancellation; Telegram's HTTP session stays owned by BotApp.
 

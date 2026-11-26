@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from aiogram import Bot
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -145,6 +146,12 @@ class ResilientTelegramSession(BaseSession):
         await asyncio.gather(*(item.session.close() for item in transports))
 
 
+class TelegramCooldownPort(Protocol):
+    async def deadline(self, bot_id: int, chat_id: int) -> int | None: ...
+
+    async def extend(self, bot_id: int, chat_id: int, until: int) -> None: ...
+
+
 class TelegramResponseRetryMiddleware:
     """Retry only explicit flood rejection, never the handler/business action.
 
@@ -158,14 +165,46 @@ class TelegramResponseRetryMiddleware:
     MAX_RETRIES = 2
     MAX_WAIT = 30.0
     MAX_TOTAL_WAIT = 45.0
+    COOLDOWN_DB_TIMEOUT = 1.0
+
+    def __init__(self, cooldowns: TelegramCooldownPort | None = None) -> None:
+        self.cooldowns = cooldowns
 
     async def __call__(self, make_request: Any, bot: Bot, method: TelegramMethod[Any]) -> Any:
+        chat_id = getattr(method, "chat_id", None)
+        tracked = (
+            self.cooldowns
+            if isinstance(chat_id, int)
+            and method.__api_method__.startswith(
+                ("send", "editMessage", "copyMessage", "forwardMessage")
+            )
+            else None
+        )
         waited = 0.0
         for attempt in range(self.MAX_RETRIES + 1):
+            if tracked is not None and isinstance(chat_id, int):
+                deadline = None
+                try:
+                    async with asyncio.timeout(self.COOLDOWN_DB_TIMEOUT):
+                        deadline = await tracked.deadline(bot.id, chat_id)
+                except Exception:
+                    log.exception("Could not read Telegram chat cooldown")
+                if deadline is not None and (remaining := math.ceil(deadline - time.time())) > 0:
+                    raise TelegramRetryAfter(
+                        method=method,
+                        message="Stored Telegram chat cooldown",
+                        retry_after=remaining,
+                    )
             try:
                 return await make_request(bot, method)
             except TelegramRetryAfter as exc:
                 delay = max(0.0, float(exc.retry_after)) + 0.1
+                if tracked is not None and isinstance(chat_id, int) and delay > self.MAX_WAIT:
+                    try:
+                        async with asyncio.timeout(self.COOLDOWN_DB_TIMEOUT):
+                            await tracked.extend(bot.id, chat_id, math.ceil(time.time() + delay))
+                    except Exception:
+                        log.exception("Could not persist Telegram chat cooldown")
                 if (
                     method.__api_method__ not in self.METHODS
                     or attempt >= self.MAX_RETRIES

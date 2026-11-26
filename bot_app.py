@@ -13,6 +13,7 @@ from app.setup_handlers import setup_handlers
 from config import Config
 from db_asyncpg.migrator import AlembicMigrator
 from db_asyncpg.pool import close_pool, create_pool
+from db_asyncpg.repositories.telegram_cooldowns import TelegramCooldownRepo
 from middlewares.dedup import DedupMiddleware
 from observability import configure_logging
 from telegram_adapters import AiogramMessenger
@@ -26,7 +27,8 @@ class BotApp:
     def __init__(self, config: Config) -> None:
         self.config = config
         session = ResilientTelegramSession()
-        session.middleware(TelegramResponseRetryMiddleware())
+        self._telegram_retry = TelegramResponseRetryMiddleware()
+        session.middleware(self._telegram_retry)
         self.bot = Bot(token=config.bot_token, session=session)
         if config.telegram_test_environment:
             from aiogram.client.telegram import TelegramAPIServer
@@ -66,6 +68,7 @@ class BotApp:
         await self.services.stop()
 
     def _bootstrap(self, pool: asyncpg.Pool) -> None:
+        self._telegram_retry.cooldowns = TelegramCooldownRepo(pool)
         self.container = ApplicationContainer.build(
             self.config,
             pool,
