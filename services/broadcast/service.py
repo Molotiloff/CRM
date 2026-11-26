@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, Protocol
 
 from db_asyncpg.ports.clients import ClientRepositoryPort
 from services.broadcast.delivery_port import BroadcastDeliveryPort
@@ -12,15 +13,37 @@ from services.broadcast.models import (
 )
 
 
+class InactiveBroadcastAudience(Protocol):
+    async def list_inactive_clients(
+        self,
+        *,
+        cutoff: datetime,
+        staff_user_ids: list[int],
+    ) -> list[dict[str, Any]]: ...
+
+
 class BroadcastService:
+    INACTIVE_TARGET = "неактивным"
+    INACTIVE_EXCLUDED_GROUPS = frozenset(
+        {"балансы", "партнер", "партнёр", "кит", "internal_wallet"}
+    )
+
     def __init__(
         self,
         *,
         repo: ClientRepositoryPort,
         excluded_chat_ids: Iterable[int] | None = None,
+        inactive_audience: InactiveBroadcastAudience | None = None,
+        staff_user_ids: Iterable[int] = (),
     ) -> None:
         self.repo = repo
         self.excluded_chat_ids = {int(chat_id) for chat_id in excluded_chat_ids or []}
+        self.inactive_audience = inactive_audience
+        self.staff_user_ids = sorted(set(staff_user_ids))
+
+    @classmethod
+    def is_inactive_target(cls, group: str | None) -> bool:
+        return (group or "").strip().casefold() == cls.INACTIVE_TARGET
 
     @staticmethod
     def extract_group_from_command(text: str) -> str | None:
@@ -33,11 +56,28 @@ class BroadcastService:
 
     @staticmethod
     def target_label(group: str | None) -> str:
+        if BroadcastService.is_inactive_target(group):
+            return "для клиентов, которые не писали больше недели"
         if group:
             return f"для группы «{group}»"
         return "для всех клиентов"
 
     async def get_target_clients(self, *, group: str | None = None) -> list[dict[str, Any]]:
+        if self.is_inactive_target(group):
+            if self.inactive_audience is None:
+                return []
+            clients = await self.inactive_audience.list_inactive_clients(
+                cutoff=datetime.now(UTC) - timedelta(days=7),
+                staff_user_ids=self.staff_user_ids,
+            )
+            return [
+                client
+                for client in clients
+                if (chat_id := _chat_id_or_none(client.get("chat_id")))
+                and chat_id not in self.excluded_chat_ids
+                and str(client.get("client_group") or "").strip().casefold()
+                not in self.INACTIVE_EXCLUDED_GROUPS
+            ]
         clients = await self.repo.list_clients()
         clients = [
             client
@@ -49,8 +89,7 @@ class BroadcastService:
 
         group_norm = group.strip().casefold()
         return [
-            c for c in clients
-            if str(c.get("client_group") or "").strip().casefold() == group_norm
+            c for c in clients if str(c.get("client_group") or "").strip().casefold() == group_norm
         ]
 
     async def send(
@@ -81,16 +120,15 @@ class BroadcastService:
 
     @staticmethod
     def empty_clients_text(group: str | None) -> str:
+        if BroadcastService.is_inactive_target(group):
+            return "По архиву не найдено клиентов, которые не писали больше недели."
         if group:
             return f"Нет активных клиентов в группе «{group}»."
         return "Нет активных клиентов для рассылки."
 
     @staticmethod
     def result_text(result: BroadcastResult) -> str:
-        return (
-            "📣 <b>Рассылка завершена</b>\n\n"
-            f"✅ Отправлено: <b>{result.sent}</b>\n"
-        )
+        return f"📣 <b>Рассылка завершена</b>\n\n✅ Отправлено: <b>{result.sent}</b>\n"
 
 
 def _chat_id_or_none(value: object) -> int | None:

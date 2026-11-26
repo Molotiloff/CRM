@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from handlers.broadcast_all import BroadcastAllHandler
 from services.broadcast import (
@@ -82,6 +83,43 @@ def test_command_parser_and_target_text_are_transport_neutral() -> None:
     assert BroadcastService.extract_group_from_command("/всем") is None
     assert BroadcastService.target_label("partners") == "для группы «partners»"
     assert BroadcastService.empty_clients_text(None) == "Нет активных клиентов для рассылки."
+
+
+async def test_inactive_broadcast_excludes_groups_and_rechecks_on_send() -> None:
+    excluded = [" БАЛАНСЫ ", "Партнер", "ПАРТНЁР", "кИт", "internal_wallet"]
+    audience = SimpleNamespace(
+        list_inactive_clients=AsyncMock(
+            side_effect=[
+                [{"chat_id": 10}, {"chat_id": 11}, {"chat_id": 12}]
+                + [{"chat_id": 100 + i, "client_group": group} for i, group in enumerate(excluded)],
+                [{"chat_id": 11, "client_group": "VIP"}, {"chat_id": 12}],
+            ]
+        )
+    )
+    service = BroadcastService(
+        repo=ClientRepoStub([{"chat_id": 99, "client_group": "Балансы"}]),
+        excluded_chat_ids={12},
+        inactive_audience=audience,
+        staff_user_ids=[42],
+    )
+    group = service.extract_group_from_command("/всем@Bot  НеАктивНым ")
+    preview = await service.get_target_clients(group=group)
+    assert [row["chat_id"] for row in preview] == [10, 11]
+    result = await service.send(
+        BroadcastCommand(target_group=group),
+        delivery=DeliveryStub({11: BroadcastDeliveryStatus.SENT}),
+    )
+    assert result.sent == 1
+    assert audience.list_inactive_clients.await_count == 2
+    assert audience.list_inactive_clients.call_args.kwargs["staff_user_ids"] == [42]
+    assert await service.get_target_clients(group="Балансы") == [
+        {"chat_id": 99, "client_group": "Балансы"}
+    ]
+
+
+async def test_inactive_broadcast_does_not_fall_back_to_all_without_archive() -> None:
+    service = BroadcastService(repo=ClientRepoStub([{"chat_id": 10}]))
+    assert await service.get_target_clients(group="неактивным") == []
 
 
 def test_broadcast_reply_filter_does_not_consume_transfer_receipts() -> None:

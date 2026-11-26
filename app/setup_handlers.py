@@ -7,6 +7,7 @@ from app.lifecycle import SchedulerLifecycleAdapter
 from app.office_cards import OFFICE_CARDS
 from app.runtime import BotRuntimeServices
 from db_asyncpg.repositories.aml_billing import AMLBillingRepository
+from db_asyncpg.repositories.broadcast_audience import BroadcastAudienceRepo
 from db_asyncpg.repositories.client_closure import ClientClosureRepo
 from db_asyncpg.repositories.client_invite_links import ClientInviteLinkRepo
 from db_asyncpg.repositories.rapira_widgets import RapiraWidgetRepository
@@ -568,6 +569,8 @@ def setup_handlers(
         broadcast_service=BroadcastService(
             repo=client_repo,
             excluded_chat_ids=silent_accounting_chat_ids,
+            inactive_audience=BroadcastAudienceRepo(container.pool) if config.message_archive_enabled else None,
+            staff_user_ids=admin_user_list or [],
         ),
         session_store=AiogramBroadcastSessionStore(),
         preview_builder=AiogramBroadcastPresenter(),

@@ -57,6 +57,12 @@ class BroadcastAllHandler:
             return
 
         target_group = self.broadcast_service.extract_group_from_command(message.text or "")
+        if (
+            self.broadcast_service.is_inactive_target(target_group)
+            and self.broadcast_service.inactive_audience is None
+        ):
+            await message.answer("Рассылка неактивным недоступна: архив сообщений выключен.")
+            return
         clients = await self.broadcast_service.get_target_clients(group=target_group)
 
         if not clients:
@@ -65,7 +71,8 @@ class BroadcastAllHandler:
 
         prompt = await message.answer(
             f"{self.preview_builder.BROADCAST_PROMPT_TEXT}\n\n"
-            f"Целевая аудитория: {self.broadcast_service.target_label(target_group)}."
+            f"Целевая аудитория: {self.broadcast_service.target_label(target_group)}.\n"
+            f"Получателей сейчас: {len(clients)}."
         )
         self.session_store.add_prompt(
             chat_id=message.chat.id,
