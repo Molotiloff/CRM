@@ -53,25 +53,31 @@ def test_service_logs_in_and_closes_session_on_invalid_page(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("chat_type", "manager", "expected"),
+    ("chat_type", "chat_id", "manager", "expected"),
     [
-        ("private", True, True),
-        ("private", False, False),
-        ("supergroup", True, False),
+        ("private", 42, True, False),
+        ("group", -100, True, True),
+        ("supergroup", -100, True, True),
+        ("supergroup", -100, False, False),
+        ("supergroup", -200, True, False),
     ],
 )
-async def test_checks_only_discloses_balance_to_staff_in_allowed_chat(chat_type, manager, expected):
+async def test_checks_only_discloses_balance_to_managers_in_admin_chat(
+    chat_type, chat_id, manager, expected
+):
     lookup = MagicMock(return_value=248)
     handler = AMLHandler(
         SimpleNamespace(is_manager=AsyncMock(return_value=manager)),
         aml_queue_service=MagicMock(),
         billing=MagicMock(),
         get_available_checks=lookup,
+        admin_chat_ids={-100},
+        admin_user_ids={42},
     )
     message = SimpleNamespace(
         from_user=SimpleNamespace(id=42, is_bot=False),
         sender_chat=None,
-        chat=SimpleNamespace(id=42, type=chat_type),
+        chat=SimpleNamespace(id=chat_id, type=chat_type),
         answer=AsyncMock(),
     )
     await handler._cmd_checks(message)

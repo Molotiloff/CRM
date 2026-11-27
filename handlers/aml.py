@@ -122,11 +122,14 @@ class AMLHandler:
     async def _cmd_checks(self, message: Message) -> None:
         user = message.from_user
         if (
-            user is None or user.is_bot or message.sender_chat is not None
-            or (message.chat.type != "private" and message.chat.id not in self.admin_chat_ids)
-            or (user.id not in self.admin_user_ids and not await self.repo.is_manager(user.id))
+            message.chat.type not in {"group", "supergroup"}
+            or message.chat.id not in self.admin_chat_ids
+            or user is None
+            or user.is_bot
+            or message.sender_chat is not None
+            or not await self.repo.is_manager(user.id)
         ):
-            await message.answer("Команда /проверки доступна менеджерам в личке с ботом и в админских чатах.")
+            await message.answer("Команда /проверки доступна только менеджерам в админском чате.")
             return
         if self._get_available_checks is None or self._checks_running:
             await message.answer("Остаток проверок сейчас недоступен. Попробуйте позже.")
