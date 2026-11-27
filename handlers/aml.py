@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import logging
 import re
 import secrets
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from html import escape
 from time import monotonic
@@ -34,6 +35,7 @@ from telegram_adapters.report_link import append_getblock_link, getblock_link_en
 from telegram_adapters.text_chunks import split_telegram_text
 
 _RE_AML = re.compile(r"^/амл(?:@\w+)?(?:\s+(.+))?$", re.IGNORECASE)
+log = logging.getLogger(__name__)
 _EVM_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 _BTC_ADDRESS = re.compile(r"^(?:[13][1-9A-HJ-NP-Za-km-z]{25,34}|bc1[ac-hj-np-z02-9]{11,87})$", re.IGNORECASE)
 _TX_HASH = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -101,17 +103,44 @@ class AMLHandler:
         admin_chat_ids: Iterable[int] | None = None,
         admin_user_ids: Iterable[int] | None = None,
         pdf_builder: AMLReportPDFBuilder | None = None,
+        get_available_checks: Callable[[], int] | None = None,
     ) -> None:
         self.repo = repo
         self.aml_queue_service = aml_queue_service
         self.billing = billing
         self._pdf_builder = pdf_builder or AMLReportPDFBuilder()
         self._pdf_executor = SerializedThreadExecutor(task_name="aml_pdf_render")
+        self._get_available_checks = get_available_checks
+        self._checks_executor = SerializedThreadExecutor(task_name="getblock_account_checks")
+        self._checks_running = False
         self._pending: dict[str, _PendingCheck] = {}
         self.admin_chat_ids = set(admin_chat_ids or [])
         self.admin_user_ids = set(admin_user_ids or [])
         self.router = Router()
         self._register()
+
+    async def _cmd_checks(self, message: Message) -> None:
+        user = message.from_user
+        if (
+            user is None or user.is_bot or message.sender_chat is not None
+            or (message.chat.type != "private" and message.chat.id not in self.admin_chat_ids)
+            or (user.id not in self.admin_user_ids and not await self.repo.is_manager(user.id))
+        ):
+            await message.answer("Команда /проверки доступна менеджерам в личке с ботом и в админских чатах.")
+            return
+        if self._get_available_checks is None or self._checks_running:
+            await message.answer("Остаток проверок сейчас недоступен. Попробуйте позже.")
+            return
+        self._checks_running = True
+        try:
+            available = await self._checks_executor.run(self._get_available_checks)
+        except (RuntimeError, ValueError) as exc:
+            log.warning("GetBlock check balance unavailable: %s", type(exc).__name__)
+            await message.answer("Не удалось получить остаток проверок GetBlock. Попробуйте позже.")
+            return
+        finally:
+            self._checks_running = False
+        await message.answer(f"GetBlock: доступно AML-проверок — {available}.")
 
     async def _cmd_aml(self, message: Message) -> None:
         if message.chat.type not in {"group", "supergroup"}:
@@ -308,5 +337,6 @@ class AMLHandler:
 
     def _register(self) -> None:
         self.router.message.register(self._cmd_aml, Command("амл"))
+        self.router.message.register(self._cmd_checks, Command("проверки"))
         self.router.callback_query.register(self._confirm, F.data.startswith("aml:yes:"))
         self.router.callback_query.register(self._confirm, F.data.startswith("aml:no:"))

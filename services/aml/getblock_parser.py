@@ -18,6 +18,29 @@ def _dispose_soup(soup: BeautifulSoup) -> None:
     gc.collect()
 
 
+def parse_available_checks(html_text: str) -> int:
+    """Read the account header, never the packages table."""
+    soup = BeautifulSoup(html_text, "html.parser")
+    try:
+        counter = re.compile(
+            r"([0-9]+(?:[ ,\u00a0\u202f][0-9]{3})*)\s+checks?\s+available", re.IGNORECASE
+        )
+        values = {
+            int(re.sub(r"[^0-9]", "", match[1]))
+            for tag in soup.find_all(string=re.compile(r"available", re.IGNORECASE))
+            if tag.parent is not None and tag.parent.name not in {"script", "style", "template"}
+            for node in list(tag.parents)[:4]
+            if node.find_parent(["table", "script", "style", "template"]) is None
+            and node.name not in {"table", "body", "html", "[document]"}
+            if (match := counter.fullmatch(node.get_text(" ", strip=True)))
+        }
+        if len(values) != 1:
+            raise ValueError("Счётчик доступных проверок GetBlock не найден или неоднозначен")
+        return values.pop()
+    finally:
+        _dispose_soup(soup)
+
+
 def _first_regex_group(text: str, patterns: list[str]) -> str | None:
     for pattern in patterns:
         match = re.search(pattern, text, re.I)

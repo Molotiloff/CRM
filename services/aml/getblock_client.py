@@ -16,6 +16,7 @@ from services.aml.getblock_parser import (
     extract_checking_address,
     extract_csrf_from_html,
     find_hidden_csrf_field,
+    parse_available_checks,
 )
 from services.http_policy import HttpRetryPolicy, HttpTimeoutPolicy
 
@@ -205,6 +206,18 @@ class GetBlockAMLClient:
         if "/user/sign-in/login" in resp.url.lower():
             raise RuntimeError("Сессия не авторизована: riskscore редиректит на логин")
         return resp
+
+    def get_available_checks(self) -> int:
+        # Use the English page for a stable label, regardless of AML report language.
+        with self._get("/en/packages", allow_redirects=False, stream=True) as response:
+            if response.status_code != 200 or "text/html" not in response.headers.get("Content-Type", "").lower():
+                raise RuntimeError("Не удалось открыть страницу пакетов GetBlock")
+            body = bytearray()
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if len(body) + len(chunk) > 2 * 1024 * 1024:
+                    raise ValueError("Страница пакетов GetBlock слишком большая")
+                body.extend(chunk)
+            return parse_available_checks(body.decode("utf-8", errors="replace"))
 
     def create_check(
         self,

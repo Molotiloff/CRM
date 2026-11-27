@@ -586,10 +586,9 @@ def setup_handlers(
     dp.include_router(city_handler.router)
 
     if config.getblock:
+        aml_service = AMLService(settings=config.getblock)
         services.aml_queue_service = AMLQueueService(
-            checker=ThreadedAMLChecker(
-                AMLService(settings=config.getblock),
-            ),
+            checker=ThreadedAMLChecker(aml_service),
             tron_balance_provider=payment_watch_service.tronscan_gateway,
             metrics=container.metrics,
         )
@@ -597,6 +596,7 @@ def setup_handlers(
             manager_repo,
             aml_queue_service=services.aml_queue_service,
             billing=AMLBillingRepository(container.pool),
+            get_available_checks=aml_service.get_available_checks,
             admin_chat_ids=admin_chat_list,
             admin_user_ids=admin_user_list,
         )

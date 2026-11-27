@@ -3,6 +3,8 @@ from __future__ import annotations
 import threading
 import time
 
+import requests
+
 from services.aml.checker import AMLCheckResult, SyncAMLChecker
 from services.aml.getblock_client import GetBlockAMLClient
 from services.aml.getblock_parser import (
@@ -42,6 +44,16 @@ class AMLService(SyncAMLChecker):
                 request,
                 cancellation_event=cancellation_event,
             )
+        finally:
+            client.close()
+
+    def get_available_checks(self) -> int:
+        client = self._build_client()
+        try:
+            client.login()
+            return client.get_available_checks()
+        except requests.RequestException as exc:
+            raise RuntimeError("GetBlock недоступен") from exc
         finally:
             client.close()
 
