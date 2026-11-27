@@ -127,9 +127,11 @@ class AMLHandler:
             or user is None
             or user.is_bot
             or message.sender_chat is not None
-            or not await self.repo.is_manager(user.id)
+            or (user.id not in self.admin_user_ids and not await self.repo.is_manager(user.id))
         ):
-            await message.answer("Команда /проверки доступна только менеджерам в админском чате.")
+            await message.answer(
+                "Команда /проверки доступна только менеджерам и администраторам в админском чате."
+            )
             return
         if self._get_available_checks is None or self._checks_running:
             await message.answer("Остаток проверок сейчас недоступен. Попробуйте позже.")
